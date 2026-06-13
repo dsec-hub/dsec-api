@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DSEC Agent — Activity Log</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; padding: 1.5rem; }
+    h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+    form { margin-bottom: 1rem; display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+    select, button { padding: .35rem .5rem; font-size: .9rem; }
+    table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8884; vertical-align: top; }
+    th { position: sticky; top: 0; background: Canvas; }
+    .tag { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .75rem; background: #8883; }
+    .out { max-width: 32rem; white-space: pre-wrap; opacity: .85; }
+    .muted { opacity: .6; }
+    code { font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <h1>DSEC Agent — Activity Log <span class="muted">({{ rows|length }} rows)</span></h1>
+
+  <form method="get">
+    <label>source:
+      <select name="source">
+        <option value="">all</option>
+        {% for s in sources %}
+        <option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>action:
+      <select name="action">
+        <option value="">all</option>
+        {% for a in actions %}
+        <option value="{{ a }}" {% if a == action %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">filter</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>time (UTC)</th>
+        <th>source</th>
+        <th>sender</th>
+        <th>subject</th>
+        <th>class</th>
+        <th>action</th>
+        <th>output</th>
+        <th>tok / $</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="muted">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '' }}</td>
+        <td><span class="tag">{{ r.source }}</span></td>
+        <td>{{ r.sender or '' }}</td>
+        <td>{{ r.subject or '' }}</td>
+        <td>{{ r.classification or '' }}</td>
+        <td><span class="tag">{{ r.action or '' }}</span></td>
+        <td class="out">{{ (r.output or '')[:400] }}</td>
+        <td class="muted">
+          {%- if r.tokens %}{{ r.tokens }}{% endif -%}
+          {%- if r.cost %} / ${{ '%.4f'|format(r.cost) }}{% endif -%}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">No activity yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
