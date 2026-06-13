@@ -40,15 +40,25 @@ engine = create_engine(settings.DATABASE_URL, **_engine_kwargs())
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def init_db() -> None:
-    """Create all tables if they don't yet exist.
+def run_migrations() -> None:
+    """Apply Alembic migrations up to ``head``.
 
-    Imported lazily so every model is registered on `Base.metadata` before
-    `create_all` runs. Safe to call on every startup (idempotent).
+    Replaces the old ``create_all`` so the schema is only ever created/evolved
+    through versioned migrations. Idempotent — a DB already at head is a fast
+    no-op. Imports Alembic lazily so it's only required where migrations run.
     """
-    from app import models  # noqa: F401  (ensure models are imported/registered)
+    from pathlib import Path
 
-    Base.metadata.create_all(bind=engine)
+    from alembic import command
+    from alembic.config import Config
+
+    root = Path(__file__).resolve().parent.parent  # dsec-api/
+    command.upgrade(Config(str(root / "alembic.ini")), "head")
+
+
+def init_db() -> None:
+    """Backwards-compatible alias — now applies migrations (not ``create_all``)."""
+    run_migrations()
 
 
 def get_db() -> Iterator[Session]:

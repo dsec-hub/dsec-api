@@ -38,8 +38,9 @@ Tracking work beyond the v1 scaffold. Grouped by area; checked = done.
 - [ ] **`POST /public/notify`**: relay to Discord (trigger-scoped).
 
 ## Platform / ops
-- [ ] Adopt Alembic for migrations (replace `create_all`).
+- [x] Adopt Alembic for migrations (replaced `create_all`; baseline migration +
+      `scripts/migrate.py` + `scripts/check_neon.py`; gated by `RUN_MIGRATIONS_ON_STARTUP`).
 - [ ] Optional Redis `RateLimiter` impl for when the API goes public.
-- [ ] Basic test suite (pytest + TestClient) covering auth, caps, pipeline branches.
+- [x] Basic test suite (pytest + TestClient) covering auth, caps, pipeline branches.
 - [ ] Request-size enforcement middleware using `MAX_REQUEST_BYTES`.
 - [ ] Structured/JSON logging for Vercel log drains.

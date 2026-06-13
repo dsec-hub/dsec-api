@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     # --- Database (Neon Postgres, pooled connection string) ---
     DATABASE_URL: str = "sqlite:///./local.db"
+    # Apply `alembic upgrade head` on startup. Convenient for local/dev; on
+    # serverless (Vercel) prefer a deploy-step migration and set this false.
+    RUN_MIGRATIONS_ON_STARTUP: bool = True
 
     # --- API keys & rate limiting ---
     API_KEY_PREFIX: str = "dsec_live_"

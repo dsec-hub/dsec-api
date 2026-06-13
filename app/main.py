@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import require_basic_auth
 from app.config import settings
-from app.db import init_db
+from app.db import run_migrations
 
 # Feature routers — each self-contained under features/<name>/router.py
 from app.dashboard.router import router as dashboard_router
@@ -38,8 +38,10 @@ _logger = logging.getLogger("dsec")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure tables exist and settings are loaded.
-    init_db()
+    # Startup: bring the schema to head (skippable in serverless — see
+    # RUN_MIGRATIONS_ON_STARTUP) and log readiness.
+    if settings.RUN_MIGRATIONS_ON_STARTUP:
+        run_migrations()
     _logger.info("DSEC agent API started (db=%s)", settings.DATABASE_URL.split("@")[-1])
     yield
     # Shutdown: nothing to tear down (no persistent in-process state).
