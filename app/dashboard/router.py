@@ -1,7 +1,7 @@
 """Server-rendered audit dashboard. GET /dashboard, basic-auth protected.
 
-Shows recent EventLog rows across every integration (email/discord/calcom/notion)
-in one place, with simple filters by source and action. Plain HTML — it's an audit
+Shows recent EventLog rows across every integration (email/discord/calcom) in one
+place, with simple filters by source and action. Plain HTML — it's an audit
 trail, not a product.
 """
 
@@ -47,7 +47,7 @@ def dashboard(
             "rows": rows,
             "source": source or "",
             "action": action or "",
-            "sources": ["email", "discord", "calcom", "notion"],
-            "actions": ["draft", "ignore", "received", "sync"],
+            "sources": ["email", "discord", "calcom"],
+            "actions": ["draft", "ignore", "received"],
         },
     )

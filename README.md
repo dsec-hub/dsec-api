@@ -3,10 +3,16 @@
 An **extensible** FastAPI integration server for DSEC. v1 ships the **email agent**
 (Gmail Apps Script → spam gate → LLM classify + draft → returns a draft, never
 auto-sends). The architecture treats email as the first *plugin* among many:
-adding Discord, Cal.com, Notion, or any other inbound integration is a new folder
+adding Discord, Cal.com, or any other inbound integration is a new folder
 under `app/features/` plus one mount line in `app/main.py` — nothing else changes.
 
 Deploys to **Vercel** (Python / Fluid Compute) backed by **Neon Postgres**.
+
+**Neon is the single source of truth** for the club's data. The internal exec
+dashboard — `dsec-app`, a separate NextAuth-gated Next.js app (not in this repo) —
+reads and writes Neon directly. `dsec-api` **owns the schema** (SQLAlchemy models
+in `app/models.py` + Alembic migrations) but deliberately does **not** expose that
+club-domain data over HTTP: it is the email/automation layer, not a data API.
 
 ---
 
@@ -26,7 +32,11 @@ uvicorn app.main:app --reload
 - API docs: <http://127.0.0.1:8000/docs> (also behind basic auth — the surface is not public)
 
 The default `DATABASE_URL` is SQLite (`./local.db`) so you can run with zero
-external services. Point it at Neon for production (see below).
+external services. Point it at Neon for production (see below). On startup the app
+applies Alembic migrations automatically (`RUN_MIGRATIONS_ON_STARTUP=true`), so the
+schema is created on first run; load sample data into the domain tables with
+`.venv/bin/python scripts/seed.py`, and run the tests with
+`.venv/bin/python -m pytest`.
 
 ---
 
@@ -38,7 +48,7 @@ environment variables** (never commit real secrets). Full table in
 [`docs/configuration.md`](docs/configuration.md).
 
 Key vars: `AGENT_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`, `DASHBOARD_USER` /
-`DASHBOARD_PASS`, `CRON_SECRET`, and the rate-limit caps.
+`DASHBOARD_PASS`, `RUN_MIGRATIONS_ON_STARTUP`, and the rate-limit caps.
 
 ---
 
@@ -51,16 +61,12 @@ Key vars: `AGENT_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`, `DASHBOARD_USER` /
 | `POST` | `/admin/keys` | basic auth | mint an API key (raw key shown once) |
 | `GET` | `/admin/keys` | basic auth | list keys (never the secret) |
 | `POST` | `/admin/keys/{id}/revoke` | basic auth | soft-revoke a key |
-| `POST` | `/admin/sync/notion` | basic auth | run the Notion→Neon sync now |
-| `GET` | `/admin/sync/notion/cron` | `CRON_SECRET` | Vercel Cron reconciliation sync |
 | `GET` | `/public/status` | API key (`read`) | counts + LLM cap status |
 | `GET` | `/public/logs` | API key (`read`) | recent EventLog rows |
-| `GET` | `/public/events` | API key (`read`) | published events from Neon |
 | `POST` | `/public/draft` | API key (`trigger`) | run classify+draft on text |
 | `GET` | `/dashboard/` | basic auth | server-rendered audit log |
 | `POST` | `/discord/webhook` | HMAC (stub) | **v2** — returns 501 |
 | `POST` | `/calcom/webhook` | HMAC (stub) | **v2** — returns 501 |
-| `POST` | `/notion/webhook` | handshake + HMAC | verification echo + drives event sync |
 
 See [`docs/api.md`](docs/api.md) for request/response shapes.
 
@@ -87,31 +93,34 @@ curl http://127.0.0.1:8000/public/status \
   -H "Authorization: Bearer dsec_live_…"
 ```
 
-Scopes: `read` (logs/status/events, no LLM spend) and `trigger` (causes drafts /
-LLM spend, counted against the daily caps).
+Scopes: `read` (logs/status, no LLM spend) and `trigger` (causes drafts / LLM
+spend, counted against the daily caps).
 
 ---
 
 ## Deploying to Vercel (this server as its own project)
 
-This FastAPI server is a **second Vercel project**, separate from the Next.js
-site (dsec.club). Vercel auto-detects FastAPI from `requirements.txt` and the
-`app` instance at `app/main.py` — the entire app becomes one Vercel Function.
+This FastAPI server is its **own Vercel project**, separate from the club's
+Next.js front-ends (including the internal `dsec-app` exec dashboard). Vercel
+auto-detects FastAPI from `requirements.txt` and the `app` instance at
+`app/main.py` — the entire app becomes one Vercel Function.
 
 1. **Create the project.** Import this repo into Vercel as a new project (root
    = this directory). No build config needed; the Python runtime is auto-detected.
 2. **Set env vars** (Project → Settings → Environment Variables) — every var from
    `.env.example` with real values. At minimum: `AGENT_SECRET`, `OPENAI_API_KEY`,
-   `DATABASE_URL` (Neon pooled), `DASHBOARD_USER`, `DASHBOARD_PASS`, `CRON_SECRET`.
+   `DATABASE_URL` (Neon pooled), `DASHBOARD_USER`, `DASHBOARD_PASS`.
 3. **Neon connection string — use the POOLED endpoint.** Serverless functions
    open many short-lived connections; the pooled (pgBouncer) host prevents
    exhausting Neon's connection limit. Example:
    `postgresql+psycopg://USER:PASS@ep-xxx-pooler.REGION.aws.neon.tech/DB?sslmode=require`
    SQLAlchemy is configured with a small pool and `pool_pre_ping=True` to survive
    Neon suspending idle compute.
-4. **Cron.** `vercel.json` registers a daily reconciliation sync hitting
-   `/admin/sync/notion/cron`. Vercel sends `Authorization: Bearer <CRON_SECRET>`;
-   set `CRON_SECRET` to match.
+4. **Migrations.** Apply the schema as a deploy step with
+   `.venv/bin/python scripts/migrate.py` (or `alembic upgrade head`) and set
+   `RUN_MIGRATIONS_ON_STARTUP=false` so cold starts don't run migrations. Leaving
+   it `true` lets the app self-migrate on startup — convenient, but a deploy-step
+   migration is preferred on serverless.
 5. **Deploy.** Push to the connected branch (or `vercel --prod`).
 6. **(Recommended)** Put Cloudflare (free) in front for WAF/DDoS/bot mitigation;
    app-level rate limiting handles the rest.
@@ -120,17 +129,24 @@ Full details + constraints in [`docs/deployment.md`](docs/deployment.md).
 
 ---
 
-## The three sync triggers (Notion → Neon)
+## Data model — Neon is the single source of truth
 
-Notion is where the committee edits events; **Neon is what dsec.club reads**
-(directly — the site does not go through this API for reads). One sync function,
-`sync_notion_events()` in `app/features/events/sync.py`, is invoked three ways:
+The club's operational data lives in Neon and is edited through `dsec-app` (the
+NextAuth-gated exec dashboard), which reads and writes the tables directly — full
+CRUD, no API in between. `dsec-api` **owns** that schema and nothing else does:
 
-1. **Notion webhook** (primary, near-real-time) — `POST /notion/webhook`.
-2. **Vercel Cron** (daily reconciliation safety net) — `GET /admin/sync/notion/cron`.
-3. **Manual admin** (push-it-now / debugging) — `POST /admin/sync/notion`.
+- **Operational tables** — `event_log`, `api_key`, `rate_limit`. Used by this
+  service (audit log, public API keys, rate limiter).
+- **Club-domain tables** — `people`, `events`, `sponsors`, `finance`, with FK
+  relations between them and `created_at` / `updated_at` / `archived`
+  (soft-delete) columns on every row. These are the dashboard's source of truth.
 
-The logic lives in exactly one place; the three triggers all call it.
+Schema changes are versioned with **Alembic** (`alembic/`, applied via
+`scripts/migrate.py`). `dsec-api` does not serve club-domain data over HTTP — it
+is the email/automation layer that happens to own the schema.
+
+> _History: an earlier scaffold mirrored events from Notion into Neon on a sync
+> schedule. That Notion integration has been removed — Neon is now authoritative._
 
 ---
 
@@ -169,7 +185,7 @@ That's it. No existing feature folder is touched. See
 - **Never store raw API keys** — argon2 hash only, shown once at creation.
 - **Trigger routes check rate limit + global LLM cap before any work.**
 - **Every feature shares core** — no feature reimplements db/auth/llm/logging.
-- **No persistent in-process state** — all durable state in Neon, scheduling via Cron.
-- **One sync implementation, three triggers.**
-- **The website reads Neon directly** — FastAPI owns ingest/writes, not reads.
+- **No persistent in-process state** — all durable state lives in Neon.
+- **Neon is the single source of truth** — `dsec-app` reads/writes it directly;
+  `dsec-api` owns the schema but never serves club-domain data over HTTP.
 - **A new integration requires zero edits to existing feature folders.**

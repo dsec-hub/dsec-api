@@ -31,8 +31,6 @@ Tracking work beyond the v1 scaffold. Grouped by area; checked = done.
 - [ ] Consider a per-thread dedupe so re-delivered messages don't re-draft.
 
 ## v2 integrations
-- [ ] **Notion sync**: implement real `_fetch_notion_events()` (Notion API,
-      pagination, property → `NotionEvent` mapping) and `X-Notion-Signature` HMAC.
 - [ ] **Discord webhook**: Ed25519 verification + relay/alert logic.
 - [ ] **Cal.com webhook**: HMAC verification + log booking → optional Discord notify.
 - [ ] **`POST /public/notify`**: relay to Discord (trigger-scoped).

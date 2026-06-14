@@ -23,11 +23,10 @@ from app.features.email.schemas import EmailRequest
 from app.features.public.schemas import (
     DraftRequest,
     DraftResponse,
-    EventOut,
     LogEntry,
     StatusResponse,
 )
-from app.models import APIKey, Event, EventLog, RateLimit
+from app.models import APIKey, EventLog, RateLimit
 
 router = APIRouter()
 
@@ -79,23 +78,6 @@ def logs_route(
         stmt = stmt.where(EventLog.action == action)
     rows = db.execute(stmt.limit(limit)).scalars().all()
     return [LogEntry.model_validate(r) for r in rows]
-
-
-@router.get("/events", response_model=list[EventOut])
-def events_route(
-    request: Request,
-    db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
-) -> list[EventOut]:
-    """Published events from Neon (section 8c). For internal tools; the website
-    bypasses this and reads Neon directly."""
-    limiter.check_request(db, key_id=key.id, ip=_client_ip(request))
-    rows = db.execute(
-        select(Event)
-        .where(Event.status == "published", Event.deleted.is_(False))
-        .order_by(Event.starts_at.asc())
-    ).scalars().all()
-    return [EventOut.model_validate(r) for r in rows]
 
 
 @router.post("/draft", response_model=DraftResponse)

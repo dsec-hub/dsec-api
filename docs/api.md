@@ -52,7 +52,7 @@ proposing times. Any failure → `{"action":"ignore"}` (never 500).
 
 ---
 
-## Admin — key management & sync
+## Admin — key management
 
 Auth: HTTP basic auth (`DASHBOARD_USER` / `DASHBOARD_PASS`). Internal only.
 
@@ -73,13 +73,6 @@ Never the secret.
 ### `POST /admin/keys/{id}/revoke`
 Soft-revoke (the row is kept for the audit trail).
 
-### `POST /admin/sync/notion`
-Run `sync_notion_events()` on demand. Returns a summary
-`{"trigger":"manual","upserted":N,"soft_deleted":M}`.
-
-### `GET /admin/sync/notion/cron`
-Same sync, authenticated via `Authorization: Bearer <CRON_SECRET>` for Vercel Cron.
-
 ---
 
 ## Public API
@@ -94,10 +87,6 @@ IP- and key-rate-limited.
 
 ### `GET /public/logs?source=&action=&limit=` — scope `read`
 Recent `EventLog` rows (max `limit=200`), newest first.
-
-### `GET /public/events` — scope `read`
-Published, non-deleted events from Neon. (The website reads Neon directly; this
-is for other internal tools.)
 
 ### `POST /public/draft` — scope `trigger`
 Runs classify+draft on supplied text. **Checked against the per-key daily trigger
@@ -120,14 +109,6 @@ HMAC-guarded stub. Returns `501 {"detail":"discord webhook not yet implemented"}
 ### `POST /calcom/webhook`
 HMAC-guarded stub. Returns `501 {"detail":"calcom webhook not yet implemented"}`.
 
-### `POST /notion/webhook`
-Two phases:
-1. **Verification handshake** — a body containing `verification_token` is echoed
-   back (and logged) so the subscription can be confirmed in Notion's UI.
-2. **Event delivery** — signed via `X-Notion-Signature` (HMAC-SHA256 of the raw
-   body keyed by the verification token). On a relevant change it calls
-   `sync_notion_events(trigger="webhook")`. Returns `202`.
-
 ---
 
 ## Dashboard — `GET /dashboard/`
@@ -141,7 +122,7 @@ filterable by `source` and `action`.
 
 | Code | Meaning |
 |---|---|
-| `401` | missing/invalid auth (agent secret, basic auth, API key, cron secret) |
+| `401` | missing/invalid auth (agent secret, basic auth, or API key) |
 | `403` | API key lacks a required scope |
 | `429` | rate limit hit — per-IP, per-key, per-key daily trigger, or global LLM cap. Includes `Retry-After`. |
 | `422` | request validation failed |

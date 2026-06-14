@@ -28,8 +28,6 @@ from app.features.admin.router import router as admin_router
 from app.features.calcom.router import router as calcom_router
 from app.features.discord.router import router as discord_router
 from app.features.email.router import router as email_router
-from app.features.events.router import router as events_router
-from app.features.notion.router import router as notion_router
 from app.features.public.router import router as public_router
 
 logging.basicConfig(level=logging.INFO)
@@ -67,11 +65,9 @@ def create_app() -> FastAPI:
     app.include_router(email_router, prefix="/email", tags=["email"])
     app.include_router(public_router, prefix="/public", tags=["public"])
     app.include_router(admin_router, prefix="/admin", tags=["admin"])
-    app.include_router(events_router, prefix="/admin", tags=["admin", "events"])
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
     app.include_router(discord_router, prefix="/discord", tags=["discord"])
     app.include_router(calcom_router, prefix="/calcom", tags=["calcom"])
-    app.include_router(notion_router, prefix="/notion", tags=["notion"])
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:

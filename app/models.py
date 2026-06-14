@@ -1,23 +1,29 @@
-"""ORM models shared across all features.
+"""ORM models.
 
-A single `EventLog` table is written by every integration (email, discord,
-calcom, notion) so the dashboard shows all activity in one place. `APIKey`,
-`RateLimit`, and `Event` support the public API, the Neon-backed limiter, and
-the Notion->Neon event mirror respectively.
+Two groups of tables share the Neon database:
+
+* **Operational** — `EventLog`, `APIKey`, `RateLimit`. Written/used by the
+  FastAPI email-agent service (audit log, public API keys, rate limiter).
+* **Club domain** — `Person`, `Event`, `Sponsor`, `FinanceEntry`. The single
+  source of truth for the internal exec dashboard (`dsec-app`), which reads and
+  writes these directly. `dsec-api` owns the schema (these models + Alembic);
+  `dsec-app` introspects the live tables. There is no Notion in the loop.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -29,6 +35,11 @@ from app.db import Base
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# =============================================================================
+# Operational tables (FastAPI email agent)
+# =============================================================================
 
 
 class EventLog(Base):
@@ -92,28 +103,119 @@ class RateLimit(Base):
     trigger_count_today: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class Event(Base):
-    """Notion -> Neon event mirror that dsec.club reads directly."""
+# =============================================================================
+# Club-domain tables (exec dashboard — read/write source of truth)
+# =============================================================================
+#
+# Field names follow the club's existing Notion schema. Every table carries
+# `created_at`, `updated_at`, and an `archived` flag for soft-deletes (the app
+# never hard-deletes a row). Relations are plain nullable FKs; the dashboard
+# resolves them with joins.
 
-    __tablename__ = "event"
+
+class Person(Base):
+    """A member/contact: exec, committee, general member, or external contact."""
+
+    __tablename__ = "people"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    notion_page_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
-    title: Mapped[str] = mapped_column(String(512))
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    starts_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    name: Mapped[str] = mapped_column(String(256))
+    # Exec / Committee Lead / Committee Member / General Member / External Contact
+    type: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    committee: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    role_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Active / Inactive / Alumni / Prospect
+    status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
-    ends_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class Event(Base):
+    """A club event, with DUSA submission tracking and attendance."""
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(512))
+    type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    trimester: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    format: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    venue: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    event_lead_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id"), index=True, nullable=True
     )
-    location: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
-    tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    committee: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dusa_submission_status: Mapped[str | None] = mapped_column(
+        String(64), index=True, nullable=True
     )
-    synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow
+    dusa_deadline: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
+    dusa_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    food_provided: Mapped[bool] = mapped_column(Boolean, default=False)
+    external_guests: Mapped[bool] = mapped_column(Boolean, default=False)
+    expected_attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actual_attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
-    deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class Sponsor(Base):
+    """A sponsorship lead/relationship through its pipeline stages."""
+
+    __tablename__ = "sponsors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organisation: Mapped[str] = mapped_column(String(256))
+    stage: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    contact_person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id"), index=True, nullable=True
+    )
+    tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    value_aud: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    dusa_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+class FinanceEntry(Base):
+    """A grant, income, reimbursement, or expense line."""
+
+    __tablename__ = "finance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item: Mapped[str] = mapped_column(String(256))
+    # Grant / Sponsorship Income / Reimbursement / Other Expense
+    type: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    amount_aud: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    gst_included: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    date_requested: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_paid: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    related_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("events.id"), index=True, nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

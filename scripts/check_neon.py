@@ -23,7 +23,15 @@ from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 from app.config import settings  # noqa: E402
 
 # The tables the application currently defines (see app/models.py).
-EXPECTED_TABLES = ["event_log", "api_key", "rate_limit", "event"]
+EXPECTED_TABLES = [
+    "event_log",
+    "api_key",
+    "rate_limit",
+    "people",
+    "events",
+    "sponsors",
+    "finance",
+]
 
 
 def main() -> int:

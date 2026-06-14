@@ -3,8 +3,8 @@
 - `require_agent_secret`  — shared-secret header for Apps-Script-style callers.
 - `require_basic_auth`    — HTTP basic auth for the dashboard / admin / docs.
 - `verify_webhook_signature(mode)` — dependency factory for third-party webhooks
-  (Discord, Cal.com, Notion). The HMAC verification is stubbed where the real
-  provider format is needed in v2, but the shape is built now.
+  (Discord, Cal.com). The HMAC verification is stubbed where the real provider
+  format is needed in v2, but the shape is built now.
 """
 
 from __future__ import annotations
@@ -51,7 +51,6 @@ def _secret_for_mode(mode: str) -> str:
     return {
         "discord": settings.DISCORD_WEBHOOK_SECRET,
         "calcom": settings.CALCOM_WEBHOOK_SECRET,
-        "notion": settings.NOTION_WEBHOOK_SECRET,
     }.get(mode, "")
 
 
@@ -62,9 +61,6 @@ def verify_webhook_signature(mode: str) -> Callable:
 
     - ``discord`` / ``calcom``: HMAC-SHA256 of the raw body, hex digest, compared
       against the provider's signature header. (Header names finalised in v2.)
-    - ``notion``: ``X-Notion-Signature`` = HMAC-SHA256 of the raw body keyed by the
-      verification token. The Notion *verification handshake* (a body containing
-      ``verification_token``) is handled in the notion router, not here.
 
     Raw body bytes are read directly from the request so a JSON parser never
     consumes the stream before the signature is computed.
@@ -78,9 +74,7 @@ def verify_webhook_signature(mode: str) -> Callable:
             return
 
         raw = await request.body()
-        if mode == "notion":
-            provided = request.headers.get("X-Notion-Signature", "")
-        elif mode == "discord":
+        if mode == "discord":
             provided = request.headers.get("X-Signature-Ed25519", "")
         else:  # calcom
             provided = request.headers.get("X-Cal-Signature-256", "")

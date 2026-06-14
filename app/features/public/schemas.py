@@ -35,19 +35,6 @@ class LogEntry(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class EventOut(BaseModel):
-    id: int
-    title: str
-    description: str | None = None
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
-    location: str | None = None
-    status: str
-    tags: list | None = None
-
-    model_config = {"from_attributes": True}
-
-
 class StatusResponse(BaseModel):
     status: str
     log_count: int

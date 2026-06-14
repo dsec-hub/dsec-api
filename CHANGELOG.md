@@ -10,23 +10,33 @@ follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 - **Tests** — `pytest` + FastAPI `TestClient` suite covering agent-secret auth
   (reject/accept), the email pipeline branches (spam-gate, fyi-no-reply,
   simple-reply, needs-meeting + Cal.com link, classify/draft error degradation,
-  never-auto-sends), and the LLM cost cap (global + per-key, asserting no spend).
-  Runs entirely on the SQLite fallback with the OpenAI layer mocked — no
-  external services required.
-- **Migrations** — Alembic introduced with a baseline migration for the current
-  models (`EventLog`, `APIKey`, `RateLimit`, `Event`). `scripts/migrate.py`
-  applies `upgrade head`; `scripts/check_neon.py` reports the live schema state.
+  never-auto-sends), the LLM cost cap (global + per-key, asserting no spend), the
+  domain models/relations, and that migrations apply cleanly. Runs entirely on
+  the SQLite fallback with the OpenAI layer mocked — no external services.
+- **Migrations** — Alembic, with a baseline migration for the operational tables
+  and a second migration adding the club-domain schema. `scripts/migrate.py`
+  applies `upgrade head`, `scripts/check_neon.py` reports the live schema state,
+  and `scripts/seed.py` loads realistic sample data.
+- **Club-domain schema** — `people`, `events`, `sponsors`, `finance` tables (with
+  FK relations) as the single source of truth for the exec dashboard (`dsec-app`),
+  which reads/writes Neon directly. `dsec-api` owns the schema; it is not exposed
+  over HTTP here.
 
 ### Changed
 - Schema creation now runs through `alembic upgrade head` instead of
-  `Base.metadata.create_all`. Startup migration is gated by the new
-  `RUN_MIGRATIONS_ON_STARTUP` setting (default true; set false on serverless and
-  run migrations as a deploy step).
+  `Base.metadata.create_all`, gated by the new `RUN_MIGRATIONS_ON_STARTUP` setting
+  (default true; set false on serverless and migrate as a deploy step).
+
+### Removed
+- **Notion integration** — the architecture no longer involves Notion. Removed the
+  Notion→Neon sync, the Notion webhook router, the `/admin/sync/notion*` and
+  `/public/events` routes, the `NOTION_*` settings, and the `vercel.json` cron.
+  Neon is the single source of truth and the dashboard edits it directly; the old
+  Notion-mirror `Event` model was replaced by the domain schema above.
 
 ### Planned (v2)
 - Implement Discord webhook (relay processed-email summaries / alerts to a channel).
 - Implement Cal.com webhook (log bookings made via the meeting link; optional Discord notify).
-- Implement the real Notion fetch in `sync_notion_events()` + `X-Notion-Signature` verification.
 - `POST /public/notify` relay route.
 - Optional Redis-backed `RateLimiter` swap-in for going public.
 

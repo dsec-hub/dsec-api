@@ -57,11 +57,6 @@ class Settings(BaseSettings):
     # --- v2 webhook secrets (reserved) ---
     DISCORD_WEBHOOK_SECRET: str = ""
     CALCOM_WEBHOOK_SECRET: str = ""
-    NOTION_WEBHOOK_SECRET: str = ""
-
-    # --- Notion events sync (reserved for v2 implementation) ---
-    NOTION_API_KEY: str = ""
-    NOTION_EVENTS_DATABASE_ID: str = ""
 
 
 @lru_cache

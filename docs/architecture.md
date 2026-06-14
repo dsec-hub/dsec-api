@@ -18,8 +18,8 @@ Everything shared lives in the **core**; every feature reuses it.
 app/
   main.py              # app factory: mounts routers, exception handlers, gated docs
   config.py            # pydantic Settings (env-driven)
-  db.py                # SQLAlchemy engine/session, init_db(), get_db dependency
-  models.py            # ORM models: EventLog, APIKey, RateLimit, Event
+  db.py                # SQLAlchemy engine/session, run_migrations(), get_db dependency
+  models.py            # ORM models: operational (EventLog/APIKey/RateLimit) + domain
   auth.py              # require_agent_secret, require_basic_auth, verify_webhook_signature
   core/
     llm.py             # generic OpenAI wrapper (classify/generate), LLMError
@@ -30,11 +30,13 @@ app/
     email/             # POST /email/process — the Gmail endpoint (v1)
     public/            # API-key auth, rate-limited external API
     admin/             # basic-auth key management
-    events/            # sync_notion_events() + manual/cron sync routes
     discord/           # v2 stub (501)
     calcom/            # v2 stub (501)
-    notion/            # webhook: verification handshake + drives event sync
   dashboard/           # GET /dashboard — server-rendered audit log
+
+alembic/               # versioned migrations (two: operational + domain schema)
+scripts/               # migrate.py · check_neon.py · seed.py (ops/dev helpers)
+tests/                 # pytest suite (run: .venv/bin/python -m pytest)
 ```
 
 ## Core modules (shared by every feature)
@@ -42,7 +44,7 @@ app/
 | Module | Responsibility |
 |---|---|
 | `db` | Engine + session. Neon (Postgres) in prod, SQLite fallback for local dev. Small pool + `pool_pre_ping` for serverless. |
-| `auth` | Three reusable deps: shared-secret header, basic auth, and a webhook-signature **factory** (`discord`/`calcom`/`notion` modes). |
+| `auth` | Three reusable deps: shared-secret header, basic auth, and a webhook-signature **factory** (`discord`/`calcom` modes). |
 | `core.llm` | Email-agnostic OpenAI wrapper. Returns text + tokens + estimated cost. Raises typed `LLMError` so callers degrade gracefully. |
 | `core.logging` | One `log_event()` writing the shared `EventLog`. Never raises into callers. |
 | `core.apikeys` | `dsec_live_<token>` generation, argon2 hashing, `require_api_key(*scopes)` verification dependency. |
@@ -66,25 +68,49 @@ require_agent_secret ──► run_pipeline()
 Any error in classify/draft is logged and downgraded to `{"action":"ignore"}` —
 the endpoint never 500s to the Apps Script (which would retry forever).
 
-## Data flow — events (Notion → Neon → site)
+## Data model — Neon is the single source of truth
+
+`dsec-api` owns the Neon schema but is **not** a data API for it. The club's
+records are edited entirely through `dsec-app` — a separate, NextAuth-gated
+Next.js dashboard (not in this repo) that reads and writes Neon directly.
 
 ```
-Notion (committee edits)
-   │   webhook / cron / manual
-   ▼
-sync_notion_events()  ── upsert + soft-delete ─►  Neon `Event` table
-                                                      │
-                                                      ▼
-                                          dsec.club reads Neon DIRECTLY
+Exec ──► dsec-app (Next.js, NextAuth) ──reads/writes──► Neon Postgres
+                                                          ▲  single source of truth
+                                                          │
+                                  dsec-api ──owns schema──┘  (email/automation;
+                                                              no domain HTTP API)
 ```
 
-FastAPI owns **ingest/writes**; it is not in the site's **read** path. The
-public `GET /public/events` route exists only for non-website internal tools.
+Two table groups share the database:
+
+* **Operational** — `event_log`, `api_key`, `rate_limit`. Read/written by this
+  service for the audit log, public API keys, and the rate limiter.
+* **Club domain** — `people`, `events`, `sponsors`, `finance`. The dashboard's
+  source of truth. Plain nullable FKs relate them (`events.event_lead_id` →
+  `people`, `sponsors.contact_person_id` → `people`, `finance.related_event_id`
+  → `events`), and every domain row carries `created_at`, `updated_at`, and an
+  `archived` soft-delete flag (the app never hard-deletes).
+
+`dsec-api` deliberately exposes **none** of the club-domain tables over HTTP.
+
+> _History: an earlier scaffold synced events from Notion into Neon (webhook +
+> cron + manual triggers). That Notion integration was removed; Neon is now
+> authoritative and `dsec-app` performs the edits._
+
+## Schema & migrations
+
+The schema is versioned with **Alembic** (`alembic/`, two migrations: an
+operational baseline, then the club-domain tables). On startup `run_migrations()`
+applies `alembic upgrade head` when `RUN_MIGRATIONS_ON_STARTUP` is set (default
+true); on serverless, disable it and migrate as a deploy step
+(`scripts/migrate.py`). Helpers: `scripts/check_neon.py` reports which tables
+exist in a live DB, and `scripts/seed.py` loads sample domain data.
 
 ## Shared log table
 
 Every integration logs to one `EventLog` (`source` column = email/discord/
-calcom/notion). The dashboard shows all activity in one place from day one.
+calcom). The dashboard shows all activity in one place from day one.
 
 ## Serverless model
 
