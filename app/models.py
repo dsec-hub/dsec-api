@@ -219,3 +219,30 @@ class FinanceEntry(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
     archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+
+# =============================================================================
+# Dashboard auth (dsec-app / NextAuth credentials)
+# =============================================================================
+
+
+class AppUser(Base):
+    """A dsec-app login (exec).
+
+    `dsec-api` owns the table (schema + migrations); `dsec-app` creates users
+    (hashing passwords in Node) and verifies them at sign-in via NextAuth. The
+    Python service never reads or writes password hashes.
+    """
+
+    __tablename__ = "app_user"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(256), unique=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(512))
+    role: Mapped[str] = mapped_column(String(32), default="exec")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

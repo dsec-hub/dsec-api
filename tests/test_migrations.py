@@ -24,6 +24,7 @@ def test_migrations_apply_full_schema(tmp_path, monkeypatch):
         "events",
         "sponsors",
         "finance",
+        "app_user",
         "alembic_version",
     } <= tables
     assert "event" not in tables  # old Notion-era mirror table was replaced

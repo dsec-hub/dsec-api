@@ -31,6 +31,7 @@ EXPECTED_TABLES = [
     "events",
     "sponsors",
     "finance",
+    "app_user",
 ]
 
 
