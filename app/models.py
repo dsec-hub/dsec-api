@@ -27,6 +27,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -129,11 +131,18 @@ class Person(Base):
     status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
-    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+        server_default=func.now(),
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
 
 
 class Event(Base):
@@ -158,18 +167,25 @@ class Event(Base):
         String(64), index=True, nullable=True
     )
     dusa_deadline: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
-    dusa_required: Mapped[bool] = mapped_column(Boolean, default=False)
-    food_provided: Mapped[bool] = mapped_column(Boolean, default=False)
-    external_guests: Mapped[bool] = mapped_column(Boolean, default=False)
+    dusa_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    food_provided: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    external_guests: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     expected_attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actual_attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
-    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+        server_default=func.now(),
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
 
 
 class Sponsor(Base):
@@ -185,14 +201,21 @@ class Sponsor(Base):
     )
     tier: Mapped[str | None] = mapped_column(String(64), nullable=True)
     value_aud: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
-    dusa_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    dusa_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
-    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+        server_default=func.now(),
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
 
 
 class FinanceEntry(Base):
@@ -205,7 +228,7 @@ class FinanceEntry(Base):
     # Grant / Sponsorship Income / Reimbursement / Other Expense
     type: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     amount_aud: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
-    gst_included: Mapped[bool] = mapped_column(Boolean, default=False)
+    gst_included: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     date_requested: Mapped[date | None] = mapped_column(Date, nullable=True)
     date_paid: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -214,11 +237,18 @@ class FinanceEntry(Base):
         ForeignKey("events.id"), index=True, nullable=True
     )
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
-    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+        server_default=func.now(),
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
 
 
 # =============================================================================
@@ -240,9 +270,16 @@ class AppUser(Base):
     email: Mapped[str] = mapped_column(String(256), unique=True, index=True)
     name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(512))
-    role: Mapped[str] = mapped_column(String(32), default="exec")
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    role: Mapped[str] = mapped_column(String(32), default="exec", server_default="exec")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+        server_default=func.now(),
     )
