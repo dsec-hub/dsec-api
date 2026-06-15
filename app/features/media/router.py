@@ -51,7 +51,7 @@ def list_media(
 ) -> list[MediaOut]:
     limiter.check_request(db, key_id=key.id, ip=_ip(request))
     if entity_type not in ENTITY_TYPES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid entity_type")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid entity_type")
     rows = service.list_media(db, entity_type=entity_type, entity_id=entity_id)
     return [MediaOut.model_validate(r) for r in rows]
 
@@ -70,11 +70,11 @@ async def upload_media(
     limiter.check_request(db, key_id=key.id, ip=_ip(request))
 
     if entity_type not in ENTITY_TYPES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid entity_type")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid entity_type")
     if role not in ROLES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid role")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid role")
     if file.content_type and not file.content_type.startswith("image/"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "file must be an image")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "file must be an image")
 
     data = await file.read()
     if not data:
@@ -95,7 +95,7 @@ async def upload_media(
     except StorageError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except ValueError as bad:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(bad))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(bad))
 
     return MediaOut.model_validate(asset)
 
@@ -111,7 +111,7 @@ def update_media(
     limiter.check_request(db, key_id=key.id, ip=_ip(request))
     data = body.model_dump(exclude_unset=True)
     if "role" in data and data["role"] not in ROLES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid role")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid role")
     asset = service.update_media(db, media_id, data)
     if asset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "media not found")

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     )
 
     # --- Shared agent / Apps Script auth ---
+    # NOTE: the literal defaults below double as the "insecure default" sentinels
+    # checked by validate_production_settings() — keep them in sync.
     AGENT_SECRET: str = "change-me-agent-secret"
 
     # --- Anthropic ---
@@ -94,6 +96,41 @@ def get_settings() -> Settings:
     Vercel's Fluid Compute model since it holds no per-request state.
     """
     return Settings()
+
+
+# Insecure factory defaults that must never reach production (kept in sync with
+# the field defaults above).
+_INSECURE_DEFAULTS = {
+    "AGENT_SECRET": "change-me-agent-secret",
+    "DASHBOARD_PASS": "change-me-dashboard-pass",
+}
+
+
+def validate_production_settings(s: "Settings | None" = None) -> None:
+    """Refuse to boot in production with insecure defaults or an ephemeral DB.
+
+    Called once at app startup (see app.main.create_app). Only enforced on Vercel
+    (``VERCEL=1``); local/dev/test keep the convenient fallbacks. Without this a
+    missing env var would silently leave the admin key-minting endpoint, gated
+    docs and dashboard behind publicly-known credentials, or persist data to a
+    throwaway serverless SQLite file. Failing loudly beats running open.
+    """
+    if os.environ.get("VERCEL") != "1":
+        return
+    s = s or settings
+    problems: list[str] = []
+    if s.AGENT_SECRET == _INSECURE_DEFAULTS["AGENT_SECRET"]:
+        problems.append("AGENT_SECRET is still the default")
+    if s.DASHBOARD_PASS == _INSECURE_DEFAULTS["DASHBOARD_PASS"]:
+        problems.append("DASHBOARD_PASS is still the default")
+    if s.DATABASE_URL.startswith("sqlite"):
+        problems.append("DATABASE_URL still points at SQLite (set the Neon pooled URL)")
+    if problems:
+        raise RuntimeError(
+            "Refusing to start: insecure production configuration — "
+            + "; ".join(problems)
+            + ". Set the real values as Vercel environment variables."
+        )
 
 
 settings = get_settings()

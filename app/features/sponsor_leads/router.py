@@ -39,7 +39,7 @@ def create_lead(
     """Public ingest — called by dsec-website forms (no API key required)."""
     limiter.check_request(db, key_id=None, ip=_ip(request))
     if not body.email or "@" not in body.email:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "valid email required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "valid email required")
     lead = service.create_lead(db, body.model_dump())
     return SponsorLeadOut.model_validate(lead)
 
@@ -70,7 +70,7 @@ def update_lead(
     data = body.model_dump(exclude_unset=True)
     if "status" in data and data["status"] not in _VALID_STATUSES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"status must be one of: {', '.join(sorted(_VALID_STATUSES))}",
         )
     lead = service.update_lead(db, lead_id, data)

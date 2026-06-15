@@ -92,10 +92,10 @@ async def ingest_dusa(
             detail=f"message {dup.existing.message_id} already ingested (import {dup.existing.id})",
         )
     except ValueError as bad:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(bad))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(bad))
     except service.IngestError as err:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"could not parse {report_type} workbook: {err}",
         )
 

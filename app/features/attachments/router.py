@@ -51,7 +51,7 @@ def list_attachments(
 ) -> list[AttachmentOut]:
     limiter.check_request(db, key_id=key.id, ip=_ip(request))
     if entity_type not in ENTITY_TYPES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid entity_type")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid entity_type")
     rows = service.list_attachments(db, entity_type=entity_type, entity_id=entity_id)
     return [AttachmentOut.model_validate(r) for r in rows]
 
@@ -69,7 +69,7 @@ async def upload_attachment(
     limiter.check_request(db, key_id=key.id, ip=_ip(request))
 
     if entity_type not in ENTITY_TYPES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid entity_type")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid entity_type")
 
     data = await file.read()
     if not data:
@@ -90,7 +90,7 @@ async def upload_attachment(
     except StorageNotConfigured as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
     except ValueError as bad:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(bad))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(bad))
 
     return AttachmentOut.model_validate(attachment)
 

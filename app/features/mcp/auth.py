@@ -12,9 +12,30 @@ from __future__ import annotations
 import contextvars
 from dataclasses import dataclass
 
+from fastapi import HTTPException
+
 from app.core.apikeys import verify_key
+from app.core.ratelimit import limiter
 from app.core.usage import log_usage
 from app.db import SessionLocal
+
+
+def _client_ip_from_scope(headers: dict[bytes, bytes]) -> str:
+    """Trusted client IP from raw ASGI headers (mirrors core.net.client_ip).
+
+    The MCP transport is pure ASGI, so we read the lowercased byte headers
+    directly rather than a FastAPI Request. Prefer the platform-set ``x-real-ip``,
+    then the rightmost (trusted) ``x-forwarded-for`` hop — never the spoofable
+    leftmost value.
+    """
+    real = headers.get(b"x-real-ip", b"").decode().strip()
+    if real:
+        return real
+    forwarded = headers.get(b"x-forwarded-for", b"").decode()
+    hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+    if hops:
+        return hops[-1]
+    return "unknown"
 
 
 @dataclass(frozen=True)
@@ -81,6 +102,15 @@ class MCPAuthMiddleware:
                         id=row.id, prefix=row.prefix,
                         scopes=frozenset(row.scopes or []), label=row.name,
                     )
+                    # Apply the same per-IP + per-key/minute limit the REST surface
+                    # enforces, so a key can't issue unlimited MCP tool calls
+                    # (each does an argon2 verify + DB work) and bypass the guard.
+                    try:
+                        limiter.check_request(
+                            db, key_id=ctx.id, ip=_client_ip_from_scope(headers)
+                        )
+                    except HTTPException as exc:
+                        return await self._too_many(send, exc.detail)
             finally:
                 db.close()
 
@@ -111,6 +141,21 @@ class MCPAuthMiddleware:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"www-authenticate", b'Bearer realm="dsec-mcp"'),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    async def _too_many(send, detail: str):
+        import json
+
+        body = json.dumps({"error": detail}).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 429,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"retry-after", b"60"),
             ],
         })
         await send({"type": "http.response.body", "body": body})

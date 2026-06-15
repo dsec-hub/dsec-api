@@ -125,7 +125,7 @@ def generate_notes(
             db, meeting, transcript=body.transcript, create_document=body.create_document
         )
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"LLM error: {exc}")
     return MeetingOut.model_validate(meeting)

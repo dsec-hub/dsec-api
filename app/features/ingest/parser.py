@@ -25,6 +25,20 @@ from openpyxl import load_workbook
 # historical 1900-leap-year bug by using Dec 30 1899).
 _EXCEL_EPOCH = datetime(1899, 12, 30)
 
+# Hard cap on rows read from any sheet. A crafted .xlsx — even within the 10 MB
+# upload ceiling — can declare an enormous used range; openpyxl's read-only
+# iterator would then stream millions of (mostly empty) rows and OOM a small
+# serverless function. Real DUSA workbooks are a few hundred rows.
+_MAX_ROWS = 100_000
+
+
+def _capped_rows(ws):
+    """Yield a worksheet's rows (values only), stopping after ``_MAX_ROWS``."""
+    for index, row in enumerate(ws.iter_rows(values_only=True)):
+        if index >= _MAX_ROWS:
+            break
+        yield row
+
 
 def excel_to_date(value: Any) -> date | None:
     """Coerce an Excel cell (serial number, datetime, or date string) to a date."""
@@ -91,7 +105,7 @@ def parse_membership(data: bytes) -> MembershipParse:
     wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     ws = wb["Report"] if "Report" in wb.sheetnames else wb[wb.sheetnames[0]]
 
-    rows = ws.iter_rows(values_only=True)
+    rows = _capped_rows(ws)
     header = next(rows, None)
     if not header:
         return MembershipParse()
@@ -192,7 +206,7 @@ def parse_pnl(data: bytes) -> PnLParse:
     ws = wb[sheet_name]
 
     # Locate the header row (it isn't row 1 — there are filter/label rows above).
-    grid = [list(r) for r in ws.iter_rows(values_only=True)]
+    grid = [list(r) for r in _capped_rows(ws)]
     header_row_idx, col_field = _locate_tx_header(grid)
     if header_row_idx is None:
         wb.close()
@@ -292,7 +306,7 @@ def _read_fy_start(wb) -> date | None:
     if name is None:
         return None
     ws = wb[name]
-    for row in ws.iter_rows(values_only=True):
+    for row in _capped_rows(ws):
         cells = [str(c).strip().lower() if c is not None else "" for c in row]
         if "fy start date" in cells:
             pos = cells.index("fy start date")

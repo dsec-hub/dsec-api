@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import require_basic_auth
-from app.config import settings
+from app.config import settings, validate_production_settings
 from app.db import run_migrations
 
 # Feature routers — each self-contained under features/<name>/router.py
@@ -69,6 +69,10 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Build and configure the FastAPI instance."""
+    # Fail loudly at boot if a production deploy is misconfigured (default
+    # secrets / SQLite). No-op outside Vercel.
+    validate_production_settings()
+
     app = FastAPI(
         title="DSEC Agent API",
         version="1.0.0",
@@ -81,6 +85,7 @@ def create_app() -> FastAPI:
     )
 
     _register_exception_handlers(app)
+    _register_request_size_limit(app)
     _register_gated_docs(app)
 
     # --- Mount features. One line each; order is cosmetic. ---
@@ -134,7 +139,7 @@ def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_exc(request: Request, exc: RequestValidationError):
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"detail": "invalid request", "errors": exc.errors()},
         )
 
@@ -145,6 +150,38 @@ def _register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "internal server error"},
         )
+
+
+def _register_request_size_limit(app: FastAPI) -> None:
+    """Reject oversized request bodies early (the TODO.md MAX_REQUEST_BYTES guard).
+
+    A cheap DoS guard for the JSON/form API surface: anything declaring a
+    ``Content-Length`` over ``MAX_REQUEST_BYTES`` is rejected with 413 before the
+    body is read into memory. The multipart upload routes (`/media`,
+    `/attachments`, `/ingest`) carry far larger files and enforce their own
+    per-file caps, so they're exempt; `/mcp` is a streaming transport and is
+    exempt too. Requests without a Content-Length (chunked) fall through to the
+    handler, which still applies its own limits.
+    """
+    # Prefixes whose handlers accept large/streamed bodies and self-limit.
+    exempt = ("/media", "/attachments", "/ingest", "/mcp")
+    max_bytes = settings.MAX_REQUEST_BYTES
+
+    @app.middleware("http")
+    async def _limit_request_size(request: Request, call_next):
+        if not request.url.path.startswith(exempt):
+            content_length = request.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    too_big = int(content_length) > max_bytes
+                except ValueError:
+                    too_big = False
+                if too_big:
+                    return JSONResponse(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        content={"detail": "request body too large"},
+                    )
+        return await call_next(request)
 
 
 def _register_gated_docs(app: FastAPI) -> None:

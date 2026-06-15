@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.auth import verify_webhook_signature
+from app.core.net import client_ip
+from app.core.ratelimit import limiter
 from app.db import get_db
 from app.features.sponsor_leads import service as leads_service
 
@@ -31,6 +33,9 @@ async def calcom_webhook(
     _: None = Depends(verify_webhook_signature("calcom")),
 ) -> dict:
     """Receive a Cal.com booking and create a SponsorLead."""
+    # Per-IP throttle: this is a public write endpoint, so bound how fast anyone
+    # (even with a valid signature) can inject sponsor leads.
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     try:
         payload = await request.json()
     except Exception:
@@ -60,7 +65,7 @@ async def calcom_webhook(
     if not email or "@" not in email:
         _logger.warning("calcom webhook: no valid email in booking %s", booking.get("uid"))
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "no valid email in booking payload",
         )
 
