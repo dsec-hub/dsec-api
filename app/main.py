@@ -41,7 +41,7 @@ from app.features.meetings.router import router as meetings_router
 from app.features.members.router import router as members_router
 from app.features.people.router import router as people_router
 from app.features.projects.router import router as projects_router
-from app.features.public.router import router as public_router
+from app.features.public_api.router import router as public_router
 from app.features.reviews.router import router as reviews_router
 from app.features.sponsor_leads.router import router as sponsor_leads_router
 from app.features.sponsor_packages.router import router as sponsor_packages_router

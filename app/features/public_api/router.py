@@ -20,7 +20,7 @@ from app.core.ratelimit import limiter
 from app.db import get_db
 from app.features.email.pipeline import run_pipeline
 from app.features.email.schemas import EmailRequest
-from app.features.public.schemas import (
+from app.features.public_api.schemas import (
     DraftRequest,
     DraftResponse,
     LogEntry,
