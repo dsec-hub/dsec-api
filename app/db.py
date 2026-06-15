@@ -22,6 +22,17 @@ class Base(DeclarativeBase):
     """Declarative base shared by all ORM models."""
 
 
+def _db_url() -> str:
+    url = settings.DATABASE_URL
+    # Neon and most Postgres hosts give a plain postgresql:// or postgres:// URL.
+    # SQLAlchemy defaults to psycopg2 for those; we ship psycopg (v3), so rewrite
+    # the scheme so SQLAlchemy picks the right driver.
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
 def _engine_kwargs() -> dict:
     url = settings.DATABASE_URL
     if url.startswith("sqlite"):
@@ -36,7 +47,7 @@ def _engine_kwargs() -> dict:
     }
 
 
-engine = create_engine(settings.DATABASE_URL, **_engine_kwargs())
+engine = create_engine(_db_url(), **_engine_kwargs())
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
