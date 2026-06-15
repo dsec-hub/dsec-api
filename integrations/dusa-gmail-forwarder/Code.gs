@@ -123,6 +123,7 @@ function processReportType_(type) {
   var sent = 0;
 
   threads.forEach(function (thread) {
+    var forwardedAny = false;
     thread.getMessages().forEach(function (msg) {
       var msgId = msg.getId();
       if (isProcessed_(msgId)) return;
@@ -134,10 +135,15 @@ function processReportType_(type) {
       if (ok) {
         markProcessed_(msgId);
         sent++;
+        forwardedAny = true;
       }
     });
-    // Label the whole thread once any of its messages were forwarded.
-    thread.addLabel(getOrCreateLabel_(INGESTED_LABEL));
+    // Label the thread ONLY once a message actually forwarded — otherwise a
+    // transient failure (e.g. a 403 on a bad key) would permanently exclude the
+    // thread from the search and the report would never be re-sent.
+    if (forwardedAny) {
+      thread.addLabel(getOrCreateLabel_(INGESTED_LABEL));
+    }
   });
 
   return sent;
