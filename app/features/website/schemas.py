@@ -16,6 +16,40 @@ class PublicMedia(BaseModel):
     height: int | None
 
 
+class PublicLead(BaseModel):
+    """The person leading an event/project — name + role + headshot only.
+
+    Never carries contact details or other PII: it's a public byline/avatar.
+    Resolved from `Event.event_lead_id` / `Project.lead_id`; `photo` is the
+    person's uploaded headshot (media_asset entity_type="person", role="photo").
+    """
+
+    name: str
+    role: str | None        # role_title, e.g. "Web Development Lead"
+    photo: str | None       # headshot (webp); null = no photo uploaded
+
+
+class PublicPerson(BaseModel):
+    """A committee/team member published on the public About page.
+
+    Only ever returned for people with `show_on_website` set. Carries the public
+    fields (name, role, bio, headshot, social links) — never internal notes,
+    email, student id, or status.
+    """
+
+    name: str
+    role: str | None        # role_title, e.g. "President"
+    type: str | None        # Exec / Committee Lead / Committee Member / ...
+    committee: str | None
+    bio: str | None
+    photo: str | None       # headshot (webp); null = no photo uploaded
+    photo_png: str | None    # headshot (png download)
+    instagram: str | None
+    linkedin: str | None
+    github: str | None
+    website: str | None
+
+
 class PublicProject(BaseModel):
     slug: str | None
     title: str
@@ -29,6 +63,7 @@ class PublicProject(BaseModel):
     image: str | None       # primary display image (webp); falls back to image_url
     download: str | None     # primary image as PNG download
     media: list[PublicMedia]
+    lead: PublicLead | None = None  # project lead (name + role + headshot)
 
 
 class PublicSpeaker(BaseModel):
@@ -77,6 +112,7 @@ class PublicEvent(BaseModel):
     image: str | None       # primary display image (webp)
     download: str | None     # primary image as PNG download
     media: list[PublicMedia]
+    lead: PublicLead | None = None  # event lead (name + role + headshot)
     speakers: list[PublicSpeaker] = []
     sponsors: list[PublicEventSponsor] = []
 

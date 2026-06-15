@@ -35,7 +35,9 @@ from app.models import (
 from .schemas import (
     PublicEvent,
     PublicEventSponsor,
+    PublicLead,
     PublicMedia,
+    PublicPerson,
     PublicProject,
     PublicSpeaker,
     PublicSponsor,
@@ -87,6 +89,26 @@ def _role_media(assets: list[MediaAsset], role: str) -> tuple[str | None, str | 
         if a.role == role:
             return a.webp_url, a.png_url
     return None, None
+
+
+def _leads_map(db: Session, person_ids: list[int | None]) -> dict[int, PublicLead]:
+    """Resolve a set of lead person ids to public bylines (name + role + photo).
+
+    Batched (one people query + one media query) so the events/projects list
+    endpoints stay free of N+1 lookups. Skips null ids and archived people.
+    """
+    ids = sorted({pid for pid in person_ids if pid})
+    if not ids:
+        return {}
+    people = db.execute(
+        select(Person).where(Person.id.in_(ids), Person.archived.is_(False))
+    ).scalars().all()
+    photos = media_service.list_media_for(db, entity_type="person", entity_ids=ids)
+    out: dict[int, PublicLead] = {}
+    for p in people:
+        webp, _png = _role_media(photos.get(p.id, []), "photo")
+        out[p.id] = PublicLead(name=p.name, role=p.role_title, photo=webp)
+    return out
 
 
 def _event_speakers(db: Session, event_id: int) -> list[PublicSpeaker]:
@@ -150,12 +172,15 @@ def _event_sponsors(db: Session, event_id: int) -> list[PublicEventSponsor]:
     return out
 
 
-def _public_project(p: Project, assets: list[MediaAsset]) -> PublicProject:
+def _public_project(
+    p: Project, assets: list[MediaAsset], *, lead: PublicLead | None = None
+) -> PublicProject:
     image, download, media = _media_block(assets, fallback_image=p.image_url)
     return PublicProject(
         slug=p.slug, title=p.name, summary=p.summary, description=p.description,
         tags=p.tech_tags, status=p.status, category=p.category,
         repo=p.repo_url, demo=p.demo_url, image=image, download=download, media=media,
+        lead=lead,
     )
 
 
@@ -166,7 +191,11 @@ def public_projects(request: Request, db: Session = Depends(get_db)) -> list[Pub
     media_map = media_service.list_media_for(
         db, entity_type="project", entity_ids=[p.id for p in rows]
     )
-    return [_public_project(p, media_map.get(p.id, [])) for p in rows]
+    leads = _leads_map(db, [p.lead_id for p in rows])
+    return [
+        _public_project(p, media_map.get(p.id, []), lead=leads.get(p.lead_id))
+        for p in rows
+    ]
 
 
 @router.get("/projects/{slug}", response_model=PublicProject)
@@ -179,7 +208,8 @@ def public_project(slug: str, request: Request, db: Session = Depends(get_db)) -
     if p is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     assets = media_service.list_media(db, entity_type="project", entity_id=p.id)
-    return _public_project(p, assets)
+    lead = _leads_map(db, [p.lead_id]).get(p.lead_id)
+    return _public_project(p, assets, lead=lead)
 
 
 def _event_slug(e: Event) -> str:
@@ -195,6 +225,7 @@ def _public_event(
     assets: list[MediaAsset],
     *,
     today: date,
+    lead: PublicLead | None = None,
     speakers: list[PublicSpeaker] | None = None,
     sponsors: list[PublicEventSponsor] | None = None,
 ) -> PublicEvent:
@@ -214,6 +245,7 @@ def _public_event(
         food_provided=bool(e.food_provided),
         upcoming=upcoming,
         image=image, download=download, media=media,
+        lead=lead,
         speakers=speakers or [],
         sponsors=sponsors or [],
     )
@@ -231,7 +263,11 @@ def public_events(request: Request, db: Session = Depends(get_db)) -> list[Publi
     media_map = media_service.list_media_for(
         db, entity_type="event", entity_ids=[e.id for e in rows]
     )
-    out = [_public_event(e, media_map.get(e.id, []), today=today) for e in rows]
+    leads = _leads_map(db, [e.event_lead_id for e in rows])
+    out = [
+        _public_event(e, media_map.get(e.id, []), today=today, lead=leads.get(e.event_lead_id))
+        for e in rows
+    ]
     # upcoming first (soonest), then past (most recent)
     upcoming = sorted([e for e in out if e.upcoming], key=lambda e: e.date or "")
     past = [e for e in out if not e.upcoming]
@@ -250,9 +286,10 @@ def public_event(slug: str, request: Request, db: Session = Depends(get_db)) -> 
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
     assets = media_service.list_media(db, entity_type="event", entity_id=match.id)
+    lead = _leads_map(db, [match.event_lead_id]).get(match.event_lead_id)
     # Speakers/sponsors are only loaded on the detail page (keeps the list lean).
     return _public_event(
-        match, assets, today=today,
+        match, assets, today=today, lead=lead,
         speakers=_event_speakers(db, match.id),
         sponsors=_event_sponsors(db, match.id),
     )
@@ -298,6 +335,40 @@ def public_sponsors(request: Request, db: Session = Depends(get_db)) -> list[Pub
             continue
         out.append(
             PublicSponsor(name=s.organisation, website=s.website, logo=webp, logo_png=png)
+        )
+    return out
+
+
+@router.get("/team", response_model=list[PublicPerson])
+def public_team(request: Request, db: Session = Depends(get_db)) -> list[PublicPerson]:
+    """Published committee/team members for the public About page.
+
+    Only people the exec has opted in (`show_on_website`) are returned, ordered
+    by `display_order` then name, each with their uploaded headshot. Returns an
+    empty list when none are published so dsec-website falls back to its static
+    roster — graceful degradation, never a failure.
+    """
+    limiter.check_request(db, key_id=None, ip=_ip(request))
+    rows = db.execute(
+        select(Person)
+        .where(Person.archived.is_(False), Person.show_on_website.is_(True))
+        .order_by(Person.display_order.asc(), Person.name.asc())
+    ).scalars().all()
+    if not rows:
+        return []
+    photos = media_service.list_media_for(
+        db, entity_type="person", entity_ids=[p.id for p in rows]
+    )
+    out: list[PublicPerson] = []
+    for p in rows:
+        webp, png = _role_media(photos.get(p.id, []), "photo")
+        out.append(
+            PublicPerson(
+                name=p.name, role=p.role_title, type=p.type, committee=p.committee,
+                bio=p.bio, photo=webp, photo_png=png,
+                instagram=p.instagram, linkedin=p.linkedin,
+                github=p.github, website=p.website,
+            )
         )
     return out
 

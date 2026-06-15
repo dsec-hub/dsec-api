@@ -140,6 +140,20 @@ class Person(Base):
     linkedin: Mapped[str | None] = mapped_column(String(256), nullable=True)
     website: Mapped[str | None] = mapped_column(String(256), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Public one-line intro shown on the website team grid (distinct from the
+    # internal `notes` above, which never leaves the dashboard).
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Publish this person on the public website team/committee grid. Off by
+    # default — the roster holds everyone, only opted-in people go public
+    # (mirrors `Sponsor.show_on_website`). The headshot lives in `media_asset`
+    # (entity_type="person", entity_id=this row's id, role="photo").
+    show_on_website: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    # Manual ordering on the public grid (lower first), then name as a tiebreak.
+    display_order: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
@@ -720,22 +734,22 @@ class UsageEvent(Base):
 
 
 class MediaAsset(Base):
-    """An uploaded image attached to an event or project.
+    """An uploaded image attached to a domain entity.
 
     Binaries live in Supabase Storage (a public bucket); only URLs + metadata
     live here. Each source upload is cropped client-side, then processed by the
     media feature into a compressed **WebP** (web display) and a **PNG**
     (download). Polymorphic by (`entity_type`, `entity_id`) — no FK so one table
-    serves both events and projects. Read by `dsec-app` (gallery) and the public
-    `/website` feed (dsec-website).
+    serves events, projects, sponsors, speakers, and people. Read by `dsec-app`
+    (gallery) and the public `/website` feed (dsec-website).
     """
 
     __tablename__ = "media_asset"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    entity_type: Mapped[str] = mapped_column(String(16))  # event|project
+    entity_type: Mapped[str] = mapped_column(String(16))  # event|project|sponsor|speaker|person
     entity_id: Mapped[int] = mapped_column(Integer)
-    role: Mapped[str] = mapped_column(String(16))  # image|poster|banner
+    role: Mapped[str] = mapped_column(String(16))  # image|poster|banner|logo|photo
     alt_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
     original_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Public Supabase URLs (what the apps render / link to)

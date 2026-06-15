@@ -17,6 +17,10 @@ class PersonBase(BaseModel):
     email: str | None = None
     status: str | None = None
     notes: str | None = None
+    # Public website fields (see Person model).
+    bio: str | None = None
+    show_on_website: bool | None = None
+    display_order: int | None = None
 
 
 class PersonCreate(PersonBase):
@@ -38,6 +42,9 @@ class PersonOut(BaseModel):
     email: str | None
     status: str | None
     notes: str | None
+    bio: str | None
+    show_on_website: bool
+    display_order: int
     archived: bool
     created_at: datetime
     updated_at: datetime
