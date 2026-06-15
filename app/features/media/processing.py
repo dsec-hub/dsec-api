@@ -29,7 +29,12 @@ class ProcessedImage:
     height: int
 
 
-def process_image(data: bytes) -> ProcessedImage:
+def process_image(data: bytes, *, keep_transparency: bool = False) -> ProcessedImage:
+    """Normalise an uploaded image to WebP (display) + PNG (download).
+
+    ``keep_transparency`` keeps the WebP's alpha channel instead of flattening it
+    onto white — used for sponsor logos, which must sit cleanly on any background.
+    """
     if not data:
         raise ValueError("empty image")
 
@@ -55,7 +60,11 @@ def process_image(data: bytes) -> ProcessedImage:
     png_buf = io.BytesIO()
     png_source.convert("RGBA").save(png_buf, format="PNG", optimize=True)
 
-    if img.mode in ("RGBA", "LA", "P"):
+    has_alpha = img.mode in ("RGBA", "LA", "P")
+    if has_alpha and keep_transparency:
+        # Logos: preserve alpha so they sit on any background.
+        webp_source = img.convert("RGBA")
+    elif has_alpha:
         flattened = Image.new("RGB", img.size, (255, 255, 255))
         rgba = img.convert("RGBA")
         flattened.paste(rgba, mask=rgba.split()[-1])

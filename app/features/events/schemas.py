@@ -29,7 +29,7 @@ class EventBase(BaseModel):
     external_guests: bool | None = None
     expected_attendance: int | None = None
     actual_attendance: int | None = None
-    notes: str | None = None
+    description: str | None = None
     budget_aud: float | None = None
     grant_aud: float | None = None
 
@@ -65,7 +65,7 @@ class EventOut(BaseModel):
     external_guests: bool
     expected_attendance: int | None
     actual_attendance: int | None
-    notes: str | None
+    description: str | None
     budget_aud: float | None
     grant_aud: float | None
     # Post-event review form (Tally) — set by the reviews feature, read-only here.

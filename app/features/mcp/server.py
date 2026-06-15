@@ -179,15 +179,16 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
                  venue: str | None = None, committee: str | None = None,
                  event_lead_id: int | None = None, ticket_url: str | None = None,
                  ticket_tiers: list[dict] | None = None, food_provided: bool | None = None,
-                 notes: str | None = None) -> dict:
+                 description: str | None = None) -> dict:
     """Create an event. Dates are ISO YYYY-MM-DD. `ticket_tiers` is tiered pricing:
-    a list of {"label": str, "price": number | null} (price 0 = free, null = unset)."""
+    a list of {"label": str, "price": number | null} (price 0 = free, null = unset).
+    `description` is free-form Markdown shown on the public website."""
     require_scope("write")
     data = _coerce(EventCreate, _data(name=name, type=type, status=status, start_date=start_date,
                                       end_date=end_date, venue=venue, committee=committee,
                                       event_lead_id=event_lead_id, ticket_url=ticket_url,
                                       ticket_tiers=ticket_tiers, food_provided=food_provided,
-                                      notes=notes))
+                                      description=description))
     with SessionLocal() as db:
         return _dump(EventOut, events_service.create_event(db, data))
 
@@ -198,15 +199,16 @@ def update_event(event_id: int, name: str | None = None, type: str | None = None
                  venue: str | None = None, committee: str | None = None,
                  event_lead_id: int | None = None, ticket_url: str | None = None,
                  ticket_tiers: list[dict] | None = None, food_provided: bool | None = None,
-                 notes: str | None = None) -> dict:
+                 description: str | None = None) -> dict:
     """Update an event (only the fields you pass change). `ticket_tiers` is tiered
-    pricing: a list of {"label": str, "price": number | null} (price 0 = free)."""
+    pricing: a list of {"label": str, "price": number | null} (price 0 = free).
+    `description` is free-form Markdown shown on the public website."""
     require_scope("write")
     data = _coerce(EventUpdate, _data(name=name, type=type, status=status, start_date=start_date,
                                       end_date=end_date, venue=venue, committee=committee,
                                       event_lead_id=event_lead_id, ticket_url=ticket_url,
                                       ticket_tiers=ticket_tiers, food_provided=food_provided,
-                                      notes=notes))
+                                      description=description))
     with SessionLocal() as db:
         return _dump(EventOut, _require(events_service.update_event(db, event_id, data), "event not found"))
 

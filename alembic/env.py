@@ -20,13 +20,16 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.config import settings  # noqa: E402
-from app.db import Base  # noqa: E402
+from app.db import Base, _db_url  # noqa: E402
 from app import models  # noqa: E402,F401  (register every model on Base.metadata)
 
 config = context.config
 
 # Authoritative DB URL — overrides whatever placeholder sits in alembic.ini.
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Use the app's `_db_url()` so the psycopg (v3) driver is selected (the project
+# ships psycopg, not psycopg2); a raw postgresql:// URL would default to psycopg2.
+_DB_URL = _db_url()
+config.set_main_option("sqlalchemy.url", _DB_URL)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -41,7 +44,7 @@ _RENDER_AS_BATCH = settings.DATABASE_URL.startswith("sqlite")
 def run_migrations_offline() -> None:
     """Emit SQL to stdout without a live DB connection."""
     context.configure(
-        url=settings.DATABASE_URL,
+        url=_DB_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

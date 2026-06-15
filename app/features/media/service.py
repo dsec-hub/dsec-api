@@ -77,7 +77,8 @@ def create_media(
     if role not in ROLES:
         raise ValueError(f"role must be one of {sorted(ROLES)}")
 
-    processed = processing.process_image(file_bytes)
+    # Sponsor logos keep their transparency; everything else flattens to white.
+    processed = processing.process_image(file_bytes, keep_transparency=(role == "logo"))
 
     uid = uuid.uuid4().hex
     base = f"{entity_type}/{entity_id}/{uid}"

@@ -16,6 +16,7 @@ class SponsorBase(BaseModel):
     value_aud: float | None = None
     support_types: list | None = None
     dusa_approved: bool | None = None
+    show_on_website: bool | None = None
     contact_email: str | None = None
     website: str | None = None
     next_action: str | None = None
@@ -44,6 +45,7 @@ class SponsorOut(BaseModel):
     value_aud: float | None
     support_types: list | None
     dusa_approved: bool
+    show_on_website: bool
     contact_email: str | None
     website: str | None
     next_action: str | None

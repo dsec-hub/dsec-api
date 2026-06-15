@@ -19,9 +19,29 @@ from app.core.ratelimit import limiter
 from app.db import get_db
 from app.features.media import service as media_service
 from app.features.projects import service as projects_service
-from app.models import Event, FinanceReport, MediaAsset, Member, Project, SponsorPackage
+from app.models import (
+    Event,
+    EventSpeaker,
+    EventSponsor,
+    FinanceReport,
+    MediaAsset,
+    Member,
+    Person,
+    Project,
+    Sponsor,
+    SponsorPackage,
+)
 
-from .schemas import PublicEvent, PublicMedia, PublicProject, PublicSponsorPackage, SiteStats
+from .schemas import (
+    PublicEvent,
+    PublicEventSponsor,
+    PublicMedia,
+    PublicProject,
+    PublicSpeaker,
+    PublicSponsor,
+    PublicSponsorPackage,
+    SiteStats,
+)
 
 router = APIRouter()
 
@@ -59,6 +79,75 @@ def _media_block(
         return fallback_image, None, []
     primary = min(assets, key=lambda a: (_ROLE_PRIORITY.get(a.role, 9), a.sort_order, a.id))
     return primary.webp_url, primary.png_url, media
+
+
+def _role_media(assets: list[MediaAsset], role: str) -> tuple[str | None, str | None]:
+    """First (webp, png) for a single-image role (speaker photo / sponsor logo)."""
+    for a in assets:
+        if a.role == role:
+            return a.webp_url, a.png_url
+    return None, None
+
+
+def _event_speakers(db: Session, event_id: int) -> list[PublicSpeaker]:
+    """Speakers for an event, with their headshots, resolving linked-person names."""
+    rows = db.execute(
+        select(EventSpeaker)
+        .where(EventSpeaker.event_id == event_id, EventSpeaker.archived.is_(False))
+        .order_by(EventSpeaker.sort_order, EventSpeaker.id)
+    ).scalars().all()
+    if not rows:
+        return []
+    # Resolve display names from linked people where the row has no free-text name.
+    person_ids = [r.person_id for r in rows if r.person_id and not r.name]
+    people = {
+        p.id: p.name
+        for p in (
+            db.execute(select(Person).where(Person.id.in_(person_ids))).scalars().all()
+            if person_ids
+            else []
+        )
+    }
+    photos = media_service.list_media_for(
+        db, entity_type="speaker", entity_ids=[r.id for r in rows]
+    )
+    out: list[PublicSpeaker] = []
+    for r in rows:
+        name = r.name or people.get(r.person_id or -1) or "Speaker"
+        webp, png = _role_media(photos.get(r.id, []), "photo")
+        out.append(
+            PublicSpeaker(name=name, title=r.title, bio=r.bio, photo=webp, photo_png=png)
+        )
+    return out
+
+
+def _event_sponsors(db: Session, event_id: int) -> list[PublicEventSponsor]:
+    """Sponsors backing an event, with their logos."""
+    rows = db.execute(
+        select(EventSponsor, Sponsor)
+        .join(Sponsor, Sponsor.id == EventSponsor.sponsor_id)
+        .where(
+            EventSponsor.event_id == event_id,
+            EventSponsor.archived.is_(False),
+            Sponsor.archived.is_(False),
+        )
+        .order_by(EventSponsor.sort_order, EventSponsor.id)
+    ).all()
+    if not rows:
+        return []
+    logos = media_service.list_media_for(
+        db, entity_type="sponsor", entity_ids=[s.id for _link, s in rows]
+    )
+    out: list[PublicEventSponsor] = []
+    for link, s in rows:
+        webp, png = _role_media(logos.get(s.id, []), "logo")
+        out.append(
+            PublicEventSponsor(
+                name=s.organisation, website=s.website, tier=link.tier,
+                logo=webp, logo_png=png,
+            )
+        )
+    return out
 
 
 def _public_project(p: Project, assets: list[MediaAsset]) -> PublicProject:
@@ -101,7 +190,14 @@ def _event_slug(e: Event) -> str:
     )
 
 
-def _public_event(e: Event, assets: list[MediaAsset], *, today: date) -> PublicEvent:
+def _public_event(
+    e: Event,
+    assets: list[MediaAsset],
+    *,
+    today: date,
+    speakers: list[PublicSpeaker] | None = None,
+    sponsors: list[PublicEventSponsor] | None = None,
+) -> PublicEvent:
     image, download, media = _media_block(assets)
     # An event auto-completes once its start date passes; its ticketing (link +
     # prices) is only meaningful while upcoming, so hide it for past events.
@@ -109,6 +205,7 @@ def _public_event(e: Event, assets: list[MediaAsset], *, today: date) -> PublicE
     return PublicEvent(
         slug=_event_slug(e),
         title=e.name, type=e.type, status=e.status,
+        description=e.description,
         date=e.start_date.isoformat() if e.start_date else None,
         end_date=e.end_date.isoformat() if e.end_date else None,
         venue=e.venue, format=e.format,
@@ -117,6 +214,8 @@ def _public_event(e: Event, assets: list[MediaAsset], *, today: date) -> PublicE
         food_provided=bool(e.food_provided),
         upcoming=upcoming,
         image=image, download=download, media=media,
+        speakers=speakers or [],
+        sponsors=sponsors or [],
     )
 
 
@@ -151,7 +250,12 @@ def public_event(slug: str, request: Request, db: Session = Depends(get_db)) -> 
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
     assets = media_service.list_media(db, entity_type="event", entity_id=match.id)
-    return _public_event(match, assets, today=today)
+    # Speakers/sponsors are only loaded on the detail page (keeps the list lean).
+    return _public_event(
+        match, assets, today=today,
+        speakers=_event_speakers(db, match.id),
+        sponsors=_event_sponsors(db, match.id),
+    )
 
 
 @router.get("/sponsor-packages", response_model=list[PublicSponsorPackage])
@@ -170,6 +274,32 @@ def public_sponsor_packages(
         .order_by(SponsorPackage.display_order.asc(), SponsorPackage.id.asc())
     ).scalars().all()
     return [PublicSponsorPackage.model_validate(r) for r in rows]
+
+
+@router.get("/sponsors", response_model=list[PublicSponsor])
+def public_sponsors(request: Request, db: Session = Depends(get_db)) -> list[PublicSponsor]:
+    """Published sponsors (show_on_website) that have an uploaded logo — the
+    public 'our sponsors' logo wall. Prospects/pipeline rows never leak here."""
+    limiter.check_request(db, key_id=None, ip=_ip(request))
+    rows = db.execute(
+        select(Sponsor)
+        .where(Sponsor.archived.is_(False), Sponsor.show_on_website.is_(True))
+        .order_by(Sponsor.organisation.asc())
+    ).scalars().all()
+    if not rows:
+        return []
+    logos = media_service.list_media_for(
+        db, entity_type="sponsor", entity_ids=[s.id for s in rows]
+    )
+    out: list[PublicSponsor] = []
+    for s in rows:
+        webp, png = _role_media(logos.get(s.id, []), "logo")
+        if not webp:  # only wall sponsors that actually have a logo
+            continue
+        out.append(
+            PublicSponsor(name=s.organisation, website=s.website, logo=webp, logo_png=png)
+        )
+    return out
 
 
 @router.get("/stats", response_model=SiteStats)

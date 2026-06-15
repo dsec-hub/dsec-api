@@ -190,7 +190,8 @@ class Event(Base):
     external_guests: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     expected_attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actual_attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Free-form event description (Markdown) shown on the public website.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Budget planning: a grant of 50% of the budget is auto-applied (see
     # features.finance.service.set_event_budget); both stored for visibility.
     budget_aud: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
@@ -248,6 +249,12 @@ class Sponsor(Base):
     # What the sponsor provides — financial and/or in-kind (e.g. ["Cash","Venue"]).
     support_types: Mapped[list | None] = mapped_column(JSON, default=list)
     dusa_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Show this sponsor (with its uploaded logo) on the public website's sponsor
+    # wall. Off by default — the sponsor table is a pipeline, so prospects stay
+    # private until an exec explicitly publishes a confirmed sponsor.
+    show_on_website: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     # Lightweight CRM/pipeline fields (the dashboard manages these as a task list).
     contact_email: Mapped[str | None] = mapped_column(String(256), nullable=True)
     website: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -866,6 +873,70 @@ class SponsorContact(Base):
     )
     archived: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), index=True
+    )
+
+
+class EventSpeaker(Base):
+    """A speaker presenting at an event.
+
+    Either links an existing `people` row (`person_id`, which autofills the
+    display name/title in the dashboard) or carries a free-text `name` for an
+    external guest not in the directory. The headshot lives in `media_asset`
+    (entity_type="speaker", entity_id=this row's id, role="photo").
+    """
+
+    __tablename__ = "event_speaker"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    person_id: Mapped[int | None] = mapped_column(
+        ForeignKey("people.id"), index=True, nullable=True
+    )
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)  # free-text fallback
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)  # e.g. "CTO at Acme"
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+
+class EventSponsor(Base):
+    """Links a sponsor to an event (many-to-many) so an event can show a wall of
+    sponsor logos. The logo itself lives on the sponsor (media_asset
+    entity_type="sponsor", role="logo") and is reused across every event.
+
+    Distinct from `Event.related_sponsor_id`, which stays as the single headline
+    sponsor link; this table is the multi-sponsor display mechanism.
+    """
+
+    __tablename__ = "event_sponsor"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    sponsor_id: Mapped[int] = mapped_column(ForeignKey("sponsors.id"), index=True)
+    tier: Mapped[str | None] = mapped_column(String(64), nullable=True)  # optional per-event tier
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "sponsor_id", name="uq_event_sponsor"),
     )
 
 

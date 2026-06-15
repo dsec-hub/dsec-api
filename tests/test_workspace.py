@@ -125,3 +125,59 @@ def test_website_feed_no_auth(client, rw_key):
     assert len(pub) == 1 and pub[0]["title"] == "Campus Compass"
     stats = client.get("/website/stats").json()
     assert stats["projects_shipped"] == 1
+
+
+def _media(db, *, entity_type, entity_id, role, webp):
+    db.add(
+        models.MediaAsset(
+            entity_type=entity_type, entity_id=entity_id, role=role,
+            webp_url=webp, png_url=webp.replace(".webp", ".png"),
+            webp_path="p.webp", png_path="p.png",
+        )
+    )
+
+
+def test_website_event_detail_includes_speakers_and_sponsors(client, db):
+    ev = models.Event(name="AI Night", start_date=date(2099, 1, 1))
+    person = models.Person(name="Ada Lovelace")
+    sponsor = models.Sponsor(organisation="Acme", website="https://acme.test")
+    db.add_all([ev, person, sponsor])
+    db.commit()
+
+    # A linked speaker (name resolved from the person) + a free-text guest.
+    db.add(models.EventSpeaker(event_id=ev.id, person_id=person.id, title="Engineer"))
+    guest = models.EventSpeaker(event_id=ev.id, name="Guest Star")
+    db.add(guest)
+    db.add(models.EventSponsor(event_id=ev.id, sponsor_id=sponsor.id, tier="Gold"))
+    db.commit()
+    _media(db, entity_type="speaker", entity_id=guest.id, role="photo", webp="http://x/g.webp")
+    _media(db, entity_type="sponsor", entity_id=sponsor.id, role="logo", webp="http://x/acme.webp")
+    db.commit()
+
+    slug = client.get("/website/events").json()[0]["slug"]
+    detail = client.get(f"/website/events/{slug}").json()
+
+    names = {s["name"] for s in detail["speakers"]}
+    assert {"Ada Lovelace", "Guest Star"} <= names
+    guest_row = next(s for s in detail["speakers"] if s["name"] == "Guest Star")
+    assert guest_row["photo"] == "http://x/g.webp"
+
+    assert len(detail["sponsors"]) == 1
+    assert detail["sponsors"][0]["name"] == "Acme"
+    assert detail["sponsors"][0]["tier"] == "Gold"
+    assert detail["sponsors"][0]["logo"] == "http://x/acme.webp"
+
+
+def test_website_sponsors_wall_only_published_with_logo(client, db):
+    published = models.Sponsor(organisation="Shown", show_on_website=True)
+    no_logo = models.Sponsor(organisation="NoLogo", show_on_website=True)
+    hidden = models.Sponsor(organisation="Hidden", show_on_website=False)
+    db.add_all([published, no_logo, hidden])
+    db.commit()
+    _media(db, entity_type="sponsor", entity_id=published.id, role="logo", webp="http://x/s.webp")
+    _media(db, entity_type="sponsor", entity_id=hidden.id, role="logo", webp="http://x/h.webp")
+    db.commit()
+
+    wall = client.get("/website/sponsors").json()  # no auth
+    names = {s["name"] for s in wall}
+    assert names == {"Shown"}  # NoLogo excluded (no logo), Hidden excluded (flag off)

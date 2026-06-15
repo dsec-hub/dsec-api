@@ -6,8 +6,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-ENTITY_TYPES = {"event", "project"}
-ROLES = {"image", "poster", "banner"}
+ENTITY_TYPES = {"event", "project", "sponsor", "speaker"}
+# image/poster/banner — gallery roles for events & projects.
+# logo — a sponsor's brand mark (kept transparent). photo — a speaker's headshot.
+ROLES = {"image", "poster", "banner", "logo", "photo"}
 
 
 class MediaOut(BaseModel):

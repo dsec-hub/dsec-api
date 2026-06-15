@@ -95,11 +95,40 @@ def test_media_upload_requires_write_scope(client, ro_key):
 def test_media_upload_bad_role(client, rw_key):
     r = client.post(
         "/media",
-        data={"entity_type": "event", "entity_id": "1", "role": "logo"},
+        data={"entity_type": "event", "entity_id": "1", "role": "bogus"},
         files={"file": ("t.png", _png_bytes((100, 100)), "image/png")},
         headers=_h(rw_key),
     )
     assert r.status_code == 422
+
+
+def test_media_upload_accepts_sponsor_logo_and_speaker_photo(client, rw_key):
+    """sponsor/logo and speaker/photo are valid now — they pass the guards and
+    the Pillow pipeline, stopping only at the (unconfigured) storage boundary."""
+    for entity_type, role in (("sponsor", "logo"), ("speaker", "photo")):
+        r = client.post(
+            "/media",
+            data={"entity_type": entity_type, "entity_id": "1", "role": role},
+            files={"file": ("t.png", _png_bytes((300, 300)), "image/png")},
+            headers=_h(rw_key),
+        )
+        assert r.status_code == 503, (entity_type, role, r.status_code)
+
+
+def _rgba_png_bytes(size=(200, 200)) -> bytes:
+    buf = io.BytesIO()
+    # A semi-transparent square — alpha must survive logo processing.
+    Image.new("RGBA", size, (230, 30, 99, 128)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_logo_webp_keeps_transparency():
+    """Default WebP flattens onto white; logos must keep their alpha channel."""
+    flat = processing.process_image(_rgba_png_bytes())
+    assert Image.open(io.BytesIO(flat.webp_bytes)).mode == "RGB"  # flattened to white
+
+    logo = processing.process_image(_rgba_png_bytes(), keep_transparency=True)
+    assert Image.open(io.BytesIO(logo.webp_bytes)).mode == "RGBA"  # alpha preserved
 
 
 def test_media_upload_rejects_non_image_content_type(client, rw_key):
