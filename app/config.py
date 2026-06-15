@@ -7,8 +7,10 @@ nothing is committed. See `.env.example` for the full list.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,8 +41,13 @@ class Settings(BaseSettings):
     # --- Database (Neon Postgres, pooled connection string) ---
     DATABASE_URL: str = "sqlite:///./local.db"
     # Apply `alembic upgrade head` on startup. Convenient for local/dev; on
-    # serverless (Vercel) prefer a deploy-step migration and set this false.
-    RUN_MIGRATIONS_ON_STARTUP: bool = True
+    # serverless (Vercel) it crashes the cold-start function and is the wrong
+    # place to migrate Neon, so it defaults OFF when running on Vercel (which
+    # always exports VERCEL=1). Migrations there are hand-run as a deploy step.
+    # An explicit RUN_MIGRATIONS_ON_STARTUP env var still overrides this.
+    RUN_MIGRATIONS_ON_STARTUP: bool = Field(
+        default_factory=lambda: os.environ.get("VERCEL") != "1"
+    )
 
     # --- API keys & rate limiting ---
     API_KEY_PREFIX: str = "dsec_live_"
