@@ -1,18 +1,30 @@
 # DSEC Agent API
 
-An **extensible** FastAPI integration server for DSEC. v1 ships the **email agent**
-(Gmail Apps Script → spam gate → LLM classify + draft → returns a draft, never
-auto-sends). The architecture treats email as the first *plugin* among many:
-adding Discord, Cal.com, or any other inbound integration is a new folder
+An **extensible** FastAPI server that backs the whole DSEC workspace. It owns the
+Neon schema and exposes it over HTTP through ~24 self-contained feature routers
+plus an MCP server — all scope-gated, rate-limited, and cost-capped:
+
+- **Workspace REST API** — scope-gated CRUD over the club's data: events, people,
+  projects, sponsors (+ packages / leads), finance, members, tasks, meetings,
+  documents, media, and attachments.
+- **Email agent** (`/email/process`) — Gmail Apps Script → spam gate → LLM
+  classify + draft → returns a draft, **never auto-sends**.
+- **Ingestion** (`/ingest/*`) — weekly DUSA spreadsheets + inbound-email capture.
+- **Public website feed** (`/website`) — no-auth, published-data-only feed that
+  `dsec-website` renders.
+- **MCP server** (`/mcp`) — the whole workspace exposed over the Model Context
+  Protocol so the exec can drive the club from Claude/ChatGPT.
+
+The architecture treats every integration as a *plugin*: adding one is a new folder
 under `app/features/` plus one mount line in `app/main.py` — nothing else changes.
 
 Deploys to **Vercel** (Python / Fluid Compute) backed by **Neon Postgres**.
 
 **Neon is the single source of truth** for the club's data. The internal exec
 dashboard — `dsec-app`, a separate NextAuth-gated Next.js app (not in this repo) —
-reads and writes Neon directly. `dsec-api` **owns the schema** (SQLAlchemy models
-in `app/models.py` + Alembic migrations) but deliberately does **not** expose that
-club-domain data over HTTP: it is the email/automation layer, not a data API.
+reads and writes Neon directly via Drizzle. `dsec-api` **owns the schema**
+(SQLAlchemy models in `app/models.py` + Alembic migrations) and also serves that
+data over HTTP via the REST routers, public feed, and MCP server above.
 
 ---
 
@@ -47,17 +59,24 @@ All config is env-driven via `app/config.py` (pydantic Settings). Copy
 environment variables** (never commit real secrets). Full table in
 [`docs/configuration.md`](docs/configuration.md).
 
-Key vars: `AGENT_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`, `DASHBOARD_USER` /
-`DASHBOARD_PASS`, `RUN_MIGRATIONS_ON_STARTUP`, and the rate-limit caps.
+Key vars: `AGENT_SECRET`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DATABASE_URL`,
+`DASHBOARD_USER` / `DASHBOARD_PASS`, `RUN_MIGRATIONS_ON_STARTUP`, the Supabase /
+Tally keys, and the rate-limit caps.
 
 ---
 
-## Endpoints (v1)
+## Endpoints (selected)
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | none | liveness |
+| `*` | `/events-api`, `/people`, `/projects`, `/sponsors`, `/sponsor-packages`, `/sponsor-leads`, `/finance`, `/members`, `/tasks`, `/meetings`, `/documents`, `/media`, `/attachments` | API key (`read` / `write`) | scope-gated workspace CRUD |
+| `POST` | `/meetings/{id}/generate-notes` | API key (`trigger`) | transcript → AI minutes (LLM, cost-capped) |
+| `POST` | `/events-api/{id}/review-form` | API key (`write`) | spin up a Tally feedback form |
 | `POST` | `/email/process` | `X-Agent-Secret` | spam gate → classify → draft |
+| `POST` | `/ingest/dusa`, `/ingest/email` | API key (`ingest`) | DUSA spreadsheet + inbound-email capture |
+| `GET` | `/website/{projects,events,stats}` | none (rate-limited) | public feed for `dsec-website` |
+| `*` | `/mcp` | API key | MCP server (workspace tools); setup guide at `/mcp-setup` |
 | `POST` | `/admin/keys` | basic auth | mint an API key (raw key shown once) |
 | `GET` | `/admin/keys` | basic auth | list keys (never the secret) |
 | `POST` | `/admin/keys/{id}/revoke` | basic auth | soft-revoke a key |
@@ -108,7 +127,7 @@ auto-detects FastAPI from `requirements.txt` and the `app` instance at
 1. **Create the project.** Import this repo into Vercel as a new project (root
    = this directory). No build config needed; the Python runtime is auto-detected.
 2. **Set env vars** (Project → Settings → Environment Variables) — every var from
-   `.env.example` with real values. At minimum: `AGENT_SECRET`, `OPENAI_API_KEY`,
+   `.env.example` with real values. At minimum: `AGENT_SECRET`, `ANTHROPIC_API_KEY`,
    `DATABASE_URL` (Neon pooled), `DASHBOARD_USER`, `DASHBOARD_PASS`.
 3. **Neon connection string — use the POOLED endpoint.** Serverless functions
    open many short-lived connections; the pooled (pgBouncer) host prevents
@@ -131,19 +150,21 @@ Full details + constraints in [`docs/deployment.md`](docs/deployment.md).
 
 ## Data model — Neon is the single source of truth
 
-The club's operational data lives in Neon and is edited through `dsec-app` (the
-NextAuth-gated exec dashboard), which reads and writes the tables directly — full
-CRUD, no API in between. `dsec-api` **owns** that schema and nothing else does:
+The club's operational data lives in Neon. `dsec-app` (the NextAuth-gated exec
+dashboard) reads and writes the tables directly via Drizzle, and `dsec-api`
+**owns** that schema and also serves it over HTTP:
 
 - **Operational tables** — `event_log`, `api_key`, `rate_limit`. Used by this
   service (audit log, public API keys, rate limiter).
-- **Club-domain tables** — `people`, `events`, `sponsors`, `finance`, with FK
+- **Club-domain tables** — `people`, `events`, `projects`, `sponsors`, `finance`,
+  `members`, `tasks`, `meetings`, `documents`, `media_asset`, and more, with FK
   relations between them and `created_at` / `updated_at` / `archived`
   (soft-delete) columns on every row. These are the dashboard's source of truth.
 
 Schema changes are versioned with **Alembic** (`alembic/`, applied via
-`scripts/migrate.py`). `dsec-api` does not serve club-domain data over HTTP — it
-is the email/automation layer that happens to own the schema.
+`scripts/migrate.py`). Alongside `dsec-app`'s direct access, `dsec-api` exposes
+these tables over HTTP through scope-gated REST routers (full CRUD), the no-auth
+public `/website` feed (published data only), and the `/mcp` server.
 
 > _History: an earlier scaffold mirrored events from Notion into Neon on a sync
 > schedule. That Notion integration has been removed — Neon is now authoritative._
@@ -186,6 +207,7 @@ That's it. No existing feature folder is touched. See
 - **Trigger routes check rate limit + global LLM cap before any work.**
 - **Every feature shares core** — no feature reimplements db/auth/llm/logging.
 - **No persistent in-process state** — all durable state lives in Neon.
-- **Neon is the single source of truth** — `dsec-app` reads/writes it directly;
-  `dsec-api` owns the schema but never serves club-domain data over HTTP.
+- **Neon is the single source of truth** — `dsec-app` reads/writes it directly via
+  Drizzle; `dsec-api` owns the schema and serves it over HTTP (scope-gated REST,
+  the public `/website` feed, and `/mcp`).
 - **A new integration requires zero edits to existing feature folders.**

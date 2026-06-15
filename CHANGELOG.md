@@ -76,15 +76,16 @@ follows [Keep a Changelog](https://keepachangelog.com/); the project uses
   simple-reply, needs-meeting + Cal.com link, classify/draft error degradation,
   never-auto-sends), the LLM cost cap (global + per-key, asserting no spend), the
   domain models/relations, and that migrations apply cleanly. Runs entirely on
-  the SQLite fallback with the OpenAI layer mocked — no external services.
+  the SQLite fallback with the Anthropic/LLM layer mocked — no external services.
 - **Migrations** — Alembic, with a baseline migration for the operational tables
   and a second migration adding the club-domain schema. `scripts/migrate.py`
   applies `upgrade head`, `scripts/check_neon.py` reports the live schema state,
   and `scripts/seed.py` loads realistic sample data.
 - **Club-domain schema** — `people`, `events`, `sponsors`, `finance` tables (with
   FK relations) as the single source of truth for the exec dashboard (`dsec-app`),
-  which reads/writes Neon directly. `dsec-api` owns the schema; it is not exposed
-  over HTTP here.
+  which reads/writes Neon directly. `dsec-api` owns the schema and now also serves
+  these tables over HTTP — scope-gated REST routers, the public `/website` feed,
+  and the `/mcp` server (see the workspace/MCP/website entries above).
 
 ### Changed
 - Schema creation now runs through `alembic upgrade head` instead of
@@ -117,7 +118,7 @@ Initial scaffold: an extensible FastAPI base with the email agent as v1.
   Models: `EventLog`, `APIKey`, `RateLimit`, `Event`.
 - **Auth** (`auth.py`) — `require_agent_secret`, `require_basic_auth`, and the
   `verify_webhook_signature(mode)` dependency factory (discord/calcom/notion).
-- **Core** — generic OpenAI wrapper (`core/llm.py`) with token/cost tracking and
+- **Core** — generic Anthropic (Claude) wrapper (`core/llm.py`) with token/cost tracking and
   typed `LLMError`; `EventLog` writer (`core/logging.py`); Neon-backed rate
   limiter behind a `RateLimiter` protocol (`core/ratelimit.py`); API-key
   generation/argon2-hashing/verification with scopes (`core/apikeys.py`).

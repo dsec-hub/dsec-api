@@ -18,7 +18,7 @@ Tracking work beyond the v1 scaffold. Grouped by area; checked = done.
 
 ## Before first production deploy
 - [ ] Create the Vercel project; set all env vars (real `AGENT_SECRET`,
-      `OPENAI_API_KEY`, Neon **pooled** `DATABASE_URL`, dashboard creds, `CRON_SECRET`).
+      `ANTHROPIC_API_KEY`, Neon **pooled** `DATABASE_URL`, dashboard creds, `CRON_SECRET`).
 - [ ] Provision Neon; confirm pooled connection string + `sslmode=require`.
 - [ ] **Image storage**: set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`, and
       create a **public** Storage bucket named `SUPABASE_STORAGE_BUCKET` (default
@@ -96,5 +96,6 @@ Portal is intended to stay free as it passes between committees. To support that
       `scripts/migrate.py` + `scripts/check_neon.py`; gated by `RUN_MIGRATIONS_ON_STARTUP`).
 - [ ] Optional Redis `RateLimiter` impl for when the API goes public.
 - [x] Basic test suite (pytest + TestClient) covering auth, caps, pipeline branches.
-- [ ] Request-size enforcement middleware using `MAX_REQUEST_BYTES`.
+- [x] Request-size enforcement middleware using `MAX_REQUEST_BYTES` (413, exempts
+      the multipart upload routes; see `_register_request_size_limit` in main.py).
 - [ ] Structured/JSON logging for Vercel log drains.

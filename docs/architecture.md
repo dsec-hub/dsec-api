@@ -22,12 +22,19 @@ app/
   models.py            # ORM models: operational (EventLog/APIKey/RateLimit) + domain
   auth.py              # require_agent_secret, require_basic_auth, verify_webhook_signature
   core/
-    llm.py             # generic OpenAI wrapper (classify/generate), LLMError
+    llm.py             # generic Anthropic (Claude) wrapper (classify/generate), LLMError
     logging.py         # log_event() → EventLog, with token/cost tracking
     ratelimit.py       # RateLimiter protocol + NeonRateLimiter
     apikeys.py         # key gen/hash/verify, require_api_key(*scopes)
   features/
     email/             # POST /email/process — the Gmail endpoint (v1)
+    ingest/            # /ingest/* — DUSA spreadsheet + inbound-email capture
+    events/ people/ projects/ tasks/ meetings/ documents/   # workspace REST CRUD
+    sponsors/ sponsor_packages/ sponsor_leads/ finance/ members/  # (scope-gated)
+    media/ attachments/  # Supabase-backed image/PDF upload + serve
+    reviews/           # per-event Tally feedback forms
+    website/           # no-auth public feed for dsec-website (published data only)
+    mcp/               # MCP server (/mcp) + setup guide (/mcp-setup)
     public/            # API-key auth, rate-limited external API
     admin/             # basic-auth key management
     discord/           # v2 stub (501)
@@ -45,7 +52,7 @@ tests/                 # pytest suite (run: .venv/bin/python -m pytest)
 |---|---|
 | `db` | Engine + session. Neon (Postgres) in prod, SQLite fallback for local dev. Small pool + `pool_pre_ping` for serverless. |
 | `auth` | Three reusable deps: shared-secret header, basic auth, and a webhook-signature **factory** (`discord`/`calcom` modes). |
-| `core.llm` | Email-agnostic OpenAI wrapper. Returns text + tokens + estimated cost. Raises typed `LLMError` so callers degrade gracefully. |
+| `core.llm` | Email-agnostic Anthropic (Claude) wrapper around `ANTHROPIC_MODEL` (default `claude-haiku-4-5-20251001`). Returns text + tokens + estimated cost. Raises typed `LLMError` so callers degrade gracefully. |
 | `core.logging` | One `log_event()` writing the shared `EventLog`. Never raises into callers. |
 | `core.apikeys` | `dsec_live_<token>` generation, argon2 hashing, `require_api_key(*scopes)` verification dependency. |
 | `core.ratelimit` | `RateLimiter` protocol + Neon-backed fixed-window impl. Per-key, per-IP, per-key-daily-trigger, and global-daily-LLM caps. |
@@ -70,29 +77,34 @@ the endpoint never 500s to the Apps Script (which would retry forever).
 
 ## Data model — Neon is the single source of truth
 
-`dsec-api` owns the Neon schema but is **not** a data API for it. The club's
-records are edited entirely through `dsec-app` — a separate, NextAuth-gated
-Next.js dashboard (not in this repo) that reads and writes Neon directly.
+`dsec-api` owns the Neon schema (SQLAlchemy models + Alembic migrations) **and**
+serves it over HTTP. The club's records are read/written both through `dsec-app`
+— a separate, NextAuth-gated Next.js dashboard (not in this repo) that talks to
+Neon directly via Drizzle — and through this API's scope-gated REST routers, its
+public `/website` feed, and the `/mcp` server.
 
 ```
 Exec ──► dsec-app (Next.js, NextAuth) ──reads/writes──► Neon Postgres
                                                           ▲  single source of truth
-                                                          │
-                                  dsec-api ──owns schema──┘  (email/automation;
-                                                              no domain HTTP API)
+   Claude / agents ──► dsec-api /mcp ─────────────────────┤
+   dsec-website ─────► dsec-api /website (public feed) ────┤
+   API-key clients ──► dsec-api REST (scoped, capped) ─────┘  (+ owns the schema)
 ```
 
 Two table groups share the database:
 
 * **Operational** — `event_log`, `api_key`, `rate_limit`. Read/written by this
   service for the audit log, public API keys, and the rate limiter.
-* **Club domain** — `people`, `events`, `sponsors`, `finance`. The dashboard's
-  source of truth. Plain nullable FKs relate them (`events.event_lead_id` →
-  `people`, `sponsors.contact_person_id` → `people`, `finance.related_event_id`
-  → `events`), and every domain row carries `created_at`, `updated_at`, and an
+* **Club domain** — `people`, `events`, `projects`, `sponsors`, `finance`,
+  `members`, `tasks`, `meetings`, `documents`, `media_asset`, and more. Plain
+  nullable FKs relate them (`events.event_lead_id` → `people`,
+  `sponsors.contact_person_id` → `people`, `finance.related_event_id` →
+  `events`), and every domain row carries `created_at`, `updated_at`, and an
   `archived` soft-delete flag (the app never hard-deletes).
 
-`dsec-api` deliberately exposes **none** of the club-domain tables over HTTP.
+`dsec-api` exposes these tables over HTTP via scope-gated REST routers (full
+CRUD), a no-auth public `/website` feed (published data only), and the `/mcp`
+server — while `dsec-app` stays the primary day-to-day read/writer via Drizzle.
 
 > _History: an earlier scaffold synced events from Notion into Neon (webhook +
 > cron + manual triggers). That Notion integration was removed; Neon is now

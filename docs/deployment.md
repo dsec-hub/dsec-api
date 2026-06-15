@@ -38,7 +38,7 @@ named `app`. Keep the bundle under the 500 MB function limit.
    (Note the `-pooler` host segment and `sslmode=require`.)
 3. **Set environment variables** (Settings → Environment Variables) — every var
    from `.env.example`. Minimum for production:
-   `AGENT_SECRET`, `OPENAI_API_KEY`, `DATABASE_URL`, `DASHBOARD_USER`,
+   `AGENT_SECRET`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, `DASHBOARD_USER`,
    `DASHBOARD_PASS`. Set `RUN_MIGRATIONS_ON_STARTUP=false` and migrate as a
    deploy step (next).
 4. **Apply migrations.** The schema is managed by Alembic. Run it as a
@@ -62,7 +62,9 @@ already at head is a fast no-op. `scripts/seed.py` loads realistic sample data
 into the club-domain tables (`people`/`events`/`sponsors`/`finance`).
 
 Neon is the **single source of truth**; the `dsec-app` dashboard reads and writes
-these tables directly. This service never serves club-domain data over HTTP.
+these tables directly via Drizzle, and this service also serves them over HTTP
+through scope-gated REST routers, the public `/website` feed, and the `/mcp`
+server.
 
 ## Local vs production DB
 
@@ -73,7 +75,7 @@ these tables directly. This service never serves club-domain data over HTTP.
 ## Tests
 
 A pytest suite lives in `tests/` (dev deps in `requirements-dev.txt`). It uses a
-throwaway SQLite DB and never touches Neon or OpenAI. Run it before deploying:
+throwaway SQLite DB and never touches Neon or Anthropic. Run it before deploying:
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
