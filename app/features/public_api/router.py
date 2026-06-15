@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.features.email.pipeline import run_pipeline
 from app.features.email.schemas import EmailRequest
@@ -31,12 +32,6 @@ from app.models import APIKey, EventLog, RateLimit
 router = APIRouter()
 
 
-def _client_ip(request: Request) -> str:
-    # Behind Vercel/Cloudflare the real IP is in X-Forwarded-For.
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("/status", response_model=StatusResponse)
@@ -45,7 +40,7 @@ def status_route(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> StatusResponse:
-    limiter.check_request(db, key_id=key.id, ip=_client_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     llm_today = db.execute(
         select(func.coalesce(func.sum(RateLimit.trigger_count_today), 0)).where(
@@ -70,7 +65,7 @@ def logs_route(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[LogEntry]:
-    limiter.check_request(db, key_id=key.id, ip=_client_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     stmt = select(EventLog).order_by(EventLog.created_at.desc())
     if source:
         stmt = stmt.where(EventLog.source == source)
@@ -92,7 +87,7 @@ def draft_route(
     Cost guard runs BEFORE any LLM work: per-IP + per-key request limit, then the
     daily trigger / global LLM cap.
     """
-    ip = _client_ip(request)
+    ip = client_ip(request)
     limiter.check_request(db, key_id=key.id, ip=ip)
     limiter.check_and_count_trigger(db, key_id=key.id)  # raises 429 if capped
 

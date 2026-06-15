@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -16,11 +17,6 @@ from .schemas import PersonCreate, PersonOut, PersonUpdate
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("", response_model=list[PersonOut])
@@ -36,7 +32,7 @@ def list_people(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[PersonOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_people(
         db, archived=include_archived, type=type, committee=committee,
         status=status, search=search, limit=limit, offset=offset,
@@ -51,7 +47,7 @@ def get_person(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> PersonOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.get_person(db, person_id)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")
@@ -65,7 +61,7 @@ def create_person(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> PersonOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.create_person(db, body.model_dump(exclude_unset=True))
     return PersonOut.model_validate(person)
 
@@ -78,7 +74,7 @@ def update_person(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> PersonOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.update_person(db, person_id, body.model_dump(exclude_unset=True))
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")
@@ -92,7 +88,7 @@ def archive_person(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> PersonOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.archive_person(db, person_id)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")

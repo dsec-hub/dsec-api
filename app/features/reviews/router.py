@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -22,11 +23,6 @@ from .tally import TallyError, TallyNotConfigured
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.post("/{event_id}/review-form", response_model=ReviewFormOut, status_code=status.HTTP_201_CREATED)
@@ -38,7 +34,7 @@ def create_review_form(
     key: APIKey = Depends(require_api_key("write")),
 ) -> ReviewFormOut:
     """Create a post-event review form in Tally for this event (idempotent)."""
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     try:
         event = service.create_review_form(db, event_id, force=force)
     except TallyNotConfigured as exc:
@@ -65,7 +61,7 @@ def get_review_form(
     key: APIKey = Depends(require_api_key("read")),
 ) -> ReviewFormOut:
     """Whether this event has a review form, its link, and a live response count."""
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     data = service.get_review_status(db, event_id)
     if data is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
@@ -80,7 +76,7 @@ def get_review_responses(
     key: APIKey = Depends(require_api_key("read")),
 ) -> ReviewResponsesOut:
     """Submissions for this event's review form, mapped onto the template questions."""
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     try:
         data = service.get_review_summary(db, event_id)
     except TallyNotConfigured as exc:

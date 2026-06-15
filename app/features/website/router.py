@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.features.media import service as media_service
 from app.features.projects import service as projects_service
@@ -51,11 +52,6 @@ router = APIRouter()
 _ROLE_PRIORITY = {"banner": 0, "image": 1, "poster": 2}
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _slugify(text: str) -> str:
@@ -186,7 +182,7 @@ def _public_project(
 
 @router.get("/projects", response_model=list[PublicProject])
 def public_projects(request: Request, db: Session = Depends(get_db)) -> list[PublicProject]:
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     rows = projects_service.list_projects(db, is_public=True, limit=100)
     media_map = media_service.list_media_for(
         db, entity_type="project", entity_ids=[p.id for p in rows]
@@ -200,7 +196,7 @@ def public_projects(request: Request, db: Session = Depends(get_db)) -> list[Pub
 
 @router.get("/projects/{slug}", response_model=PublicProject)
 def public_project(slug: str, request: Request, db: Session = Depends(get_db)) -> PublicProject:
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     p = db.execute(
         select(Project).where(Project.slug == slug, Project.is_public.is_(True),
                               Project.archived.is_(False))
@@ -254,7 +250,7 @@ def _public_event(
 @router.get("/events", response_model=list[PublicEvent])
 def public_events(request: Request, db: Session = Depends(get_db)) -> list[PublicEvent]:
     """Non-archived events with a confirmed date, soonest upcoming first."""
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     today = date.today()
     rows = db.execute(
         select(Event).where(Event.archived.is_(False), Event.start_date.is_not(None))
@@ -277,7 +273,7 @@ def public_events(request: Request, db: Session = Depends(get_db)) -> list[Publi
 @router.get("/events/{slug}", response_model=PublicEvent)
 def public_event(slug: str, request: Request, db: Session = Depends(get_db)) -> PublicEvent:
     """One event by its computed slug (matches the slugs from /website/events)."""
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     today = date.today()
     rows = db.execute(
         select(Event).where(Event.archived.is_(False), Event.start_date.is_not(None))
@@ -304,7 +300,7 @@ def public_sponsor_packages(
     Returns an empty list when no packages exist so dsec-website falls back
     to its hardcoded tiers — no failure, just graceful degradation.
     """
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     rows = db.execute(
         select(SponsorPackage)
         .where(SponsorPackage.is_visible.is_(True))
@@ -317,7 +313,7 @@ def public_sponsor_packages(
 def public_sponsors(request: Request, db: Session = Depends(get_db)) -> list[PublicSponsor]:
     """Published sponsors (show_on_website) that have an uploaded logo — the
     public 'our sponsors' logo wall. Prospects/pipeline rows never leak here."""
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     rows = db.execute(
         select(Sponsor)
         .where(Sponsor.archived.is_(False), Sponsor.show_on_website.is_(True))
@@ -348,7 +344,7 @@ def public_team(request: Request, db: Session = Depends(get_db)) -> list[PublicP
     empty list when none are published so dsec-website falls back to its static
     roster — graceful degradation, never a failure.
     """
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     rows = db.execute(
         select(Person)
         .where(Person.archived.is_(False), Person.show_on_website.is_(True))
@@ -376,7 +372,7 @@ def public_team(request: Request, db: Session = Depends(get_db)) -> list[PublicP
 @router.get("/stats", response_model=SiteStats)
 def public_stats(request: Request, db: Session = Depends(get_db)) -> SiteStats:
     """Live social-proof figures (replaces the website's hardcoded placeholders)."""
-    limiter.check_request(db, key_id=None, ip=_ip(request))
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     members = db.execute(
         select(func.count()).select_from(Member).where(Member.is_current.is_(True))
     ).scalar_one()

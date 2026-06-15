@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -34,11 +35,6 @@ from .storage import StorageError
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("", response_model=list[MediaOut])
@@ -49,7 +45,7 @@ def list_media(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[MediaOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if entity_type not in ENTITY_TYPES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid entity_type")
     rows = service.list_media(db, entity_type=entity_type, entity_id=entity_id)
@@ -67,7 +63,7 @@ async def upload_media(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> MediaOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
 
     if entity_type not in ENTITY_TYPES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid entity_type")
@@ -108,7 +104,7 @@ def update_media(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> MediaOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     data = body.model_dump(exclude_unset=True)
     if "role" in data and data["role"] not in ROLES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid role")
@@ -125,6 +121,6 @@ def delete_media(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> None:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if not service.delete_media(db, media_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "media not found")

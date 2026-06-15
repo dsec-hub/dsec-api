@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -16,11 +17,6 @@ from .schemas import SponsorPackageCreate, SponsorPackageOut, SponsorPackageUpda
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("", response_model=list[SponsorPackageOut])
@@ -29,7 +25,7 @@ def list_packages(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[SponsorPackageOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_packages(db)
     return [SponsorPackageOut.model_validate(r) for r in rows]
 
@@ -41,7 +37,7 @@ def get_package(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> SponsorPackageOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pkg = service.get_package(db, package_id)
     if pkg is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "package not found")
@@ -55,7 +51,7 @@ def create_package(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> SponsorPackageOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pkg = service.create_package(db, body.model_dump(exclude_unset=True))
     return SponsorPackageOut.model_validate(pkg)
 
@@ -68,7 +64,7 @@ def update_package(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> SponsorPackageOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pkg = service.update_package(db, package_id, body.model_dump(exclude_unset=True))
     if pkg is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "package not found")
@@ -82,6 +78,6 @@ def delete_package(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> None:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if not service.delete_package(db, package_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "package not found")

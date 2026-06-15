@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -16,11 +17,6 @@ from .schemas import DocumentCreate, DocumentOut, DocumentUpdate
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("", response_model=list[DocumentOut])
@@ -41,7 +37,7 @@ def list_documents(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[DocumentOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_documents(
         db, archived=include_archived, type=type, status=status,
         assignee_id=assignee_id, parent_id=parent_id, top_level=top_level,
@@ -59,7 +55,7 @@ def get_document(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> DocumentOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.get_document(db, document_id)
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
@@ -73,7 +69,7 @@ def create_document(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> DocumentOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.create_document(db, body.model_dump(exclude_unset=True))
     return DocumentOut.model_validate(doc)
 
@@ -86,7 +82,7 @@ def update_document(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> DocumentOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.update_document(db, document_id, body.model_dump(exclude_unset=True))
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
@@ -100,7 +96,7 @@ def archive_document(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> DocumentOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.archive_document(db, document_id)
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")

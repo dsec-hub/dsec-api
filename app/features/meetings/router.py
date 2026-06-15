@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.apikeys import require_api_key
 from app.core.llm import LLMError
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -18,11 +19,6 @@ from .schemas import GenerateNotes, MeetingCreate, MeetingOut, MeetingUpdate
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("", response_model=list[MeetingOut])
@@ -37,7 +33,7 @@ def list_meetings(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[MeetingOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_meetings(
         db, archived=include_archived, type=type, status=status,
         related_event_id=related_event_id, limit=limit, offset=offset,
@@ -52,7 +48,7 @@ def get_meeting(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> MeetingOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     meeting = service.get_meeting(db, meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
@@ -66,7 +62,7 @@ def create_meeting(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> MeetingOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     meeting = service.create_meeting(db, body.model_dump(exclude_unset=True))
     return MeetingOut.model_validate(meeting)
 
@@ -79,7 +75,7 @@ def update_meeting(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> MeetingOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     meeting = service.update_meeting(db, meeting_id, body.model_dump(exclude_unset=True))
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
@@ -93,7 +89,7 @@ def archive_meeting(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> MeetingOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     meeting = service.archive_meeting(db, meeting_id)
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
@@ -113,7 +109,7 @@ def generate_notes(
     Cost guard runs BEFORE any LLM work: per-IP/per-key request limit, then the
     daily trigger / global LLM cap. Also creates a MeetingNotes document.
     """
-    ip = _ip(request)
+    ip = client_ip(request)
     limiter.check_request(db, key_id=key.id, ip=ip)
     limiter.check_and_count_trigger(db, key_id=key.id)  # raises 429 if capped
 

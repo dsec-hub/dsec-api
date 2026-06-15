@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -24,11 +25,6 @@ from .schemas import (
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 # -----------------------------------------------------------------------------
@@ -46,7 +42,7 @@ def list_boards(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[BoardOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_boards(
         db, archived=include_archived, committee=committee, limit=limit, offset=offset,
     )
@@ -60,7 +56,7 @@ def create_board(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> BoardOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     board = service.create_board(db, body.model_dump(exclude_unset=True))
     return BoardOut.model_validate(board)
 
@@ -72,7 +68,7 @@ def get_board(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> BoardOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     board = service.get_board(db, board_id)
     if board is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "board not found")
@@ -87,7 +83,7 @@ def update_board(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> BoardOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     board = service.update_board(db, board_id, body.model_dump(exclude_unset=True))
     if board is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "board not found")
@@ -101,7 +97,7 @@ def archive_board(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> BoardOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     board = service.archive_board(db, board_id)
     if board is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "board not found")
@@ -126,7 +122,7 @@ def list_tasks(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[TaskOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_tasks(
         db, archived=include_archived, board_id=board_id, assignee_id=assignee_id,
         status=status, committee=committee, limit=limit, offset=offset,
@@ -141,7 +137,7 @@ def create_task(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> TaskOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     task = service.create_task(db, body.model_dump(exclude_unset=True))
     return TaskOut.model_validate(task)
 
@@ -153,7 +149,7 @@ def get_task(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> TaskOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     task = service.get_task(db, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
@@ -168,7 +164,7 @@ def update_task(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> TaskOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     task = service.update_task(db, task_id, body.model_dump(exclude_unset=True))
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
@@ -183,7 +179,7 @@ def move_task(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> TaskOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     task = service.move_task(db, task_id, status=body.status, position=body.position)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
@@ -197,7 +193,7 @@ def archive_task(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> TaskOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     task = service.archive_task(db, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")

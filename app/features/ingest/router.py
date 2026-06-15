@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core import logging as event_logging
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.features.ingest import service
 from app.features.ingest.schemas import (
@@ -33,16 +34,12 @@ from app.models import APIKey, DusaImport, EventLog
 router = APIRouter()
 
 # Generous upload ceiling — these workbooks are tens of KB; this just stops an
-# accidental huge POST. (The basic-auth MAX_REQUEST_BYTES guard does not apply
-# to API-key routes.)
+# accidental huge POST. (/ingest is exempt from the global MAX_REQUEST_BYTES
+# middleware in main.py because it accepts multipart uploads, so it enforces its
+# own per-file cap here.)
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
-def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -67,7 +64,7 @@ async def ingest_dusa(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("ingest")),
 ) -> IngestResponse:
-    limiter.check_request(db, key_id=key.id, ip=_client_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
 
     data = await file.read()
     if not data:
@@ -127,7 +124,7 @@ def capture_email(
     with a ``200`` (not a 409) so the Apps Script treats it as success and never
     retries.
     """
-    limiter.check_request(db, key_id=key.id, ip=_client_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
 
     existing = db.execute(
         select(EventLog).where(
@@ -164,7 +161,7 @@ def list_imports(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[ImportLogEntry]:
-    limiter.check_request(db, key_id=key.id, ip=_client_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = db.execute(
         select(DusaImport).order_by(DusaImport.created_at.desc()).limit(min(limit, 100))
     ).scalars().all()

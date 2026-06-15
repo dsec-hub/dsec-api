@@ -8,9 +8,50 @@ misconfigured production deploy refuses to boot.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.config import Settings, validate_production_settings
+from app.core.net import client_ip
+
+
+class _Headers(dict):
+    """Minimal case-insensitive header map (like Starlette's Headers)."""
+
+    def get(self, key, default=None):  # type: ignore[override]
+        return super().get(key.lower(), default)
+
+
+def _req(headers: dict, host: str = "9.9.9.9"):
+    return SimpleNamespace(
+        headers=_Headers({k.lower(): v for k, v in headers.items()}),
+        client=SimpleNamespace(host=host),
+    )
+
+
+def test_client_ip_prefers_trusted_x_real_ip():
+    # A spoofed leftmost X-Forwarded-For must be ignored when x-real-ip is set.
+    r = _req({"x-real-ip": "1.2.3.4", "x-forwarded-for": "6.6.6.6, 1.2.3.4"})
+    assert client_ip(r) == "1.2.3.4"
+
+
+def test_client_ip_uses_rightmost_xff_hop():
+    r = _req({"x-forwarded-for": "spoofed, 9.9.9.9"})
+    assert client_ip(r) == "9.9.9.9"
+
+
+def test_rotating_leftmost_xff_shares_one_bucket():
+    # Two requests with DIFFERENT spoofed leftmost values but the same trusted
+    # tail must resolve to the SAME ip — so an attacker can't mint a fresh
+    # rate-limit bucket per request by rotating X-Forwarded-For.
+    a = client_ip(_req({"x-forwarded-for": "aaa.aaa.aaa.aaa, 5.5.5.5"}))
+    b = client_ip(_req({"x-forwarded-for": "bbb.bbb.bbb.bbb, 5.5.5.5"}))
+    assert a == b == "5.5.5.5"
+
+
+def test_client_ip_falls_back_to_socket_peer():
+    assert client_ip(_req({})) == "9.9.9.9"
 
 
 def test_oversized_body_rejected_on_non_exempt_route(client):

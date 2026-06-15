@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
+from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
@@ -16,11 +17,6 @@ from .schemas import EventBudgetOut, FinanceSummary, ReportOut, SetBudget, Trans
 router = APIRouter()
 
 
-def _ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("/summary", response_model=FinanceSummary)
@@ -29,7 +25,7 @@ def summary(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> FinanceSummary:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     return FinanceSummary(**service.finances_summary(db))
 
 
@@ -42,7 +38,7 @@ def transactions(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[TransactionOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_transactions(db, kind=kind, limit=limit, offset=offset)
     return [TransactionOut.model_validate(r) for r in rows]
 
@@ -54,7 +50,7 @@ def reports(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("read")),
 ) -> list[ReportOut]:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_reports(db, limit=limit)
     return [ReportOut.model_validate(r) for r in rows]
 
@@ -67,7 +63,7 @@ def set_budget(
     db: Session = Depends(get_db),
     key: APIKey = Depends(require_api_key("write")),
 ) -> EventBudgetOut:
-    limiter.check_request(db, key_id=key.id, ip=_ip(request))
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     ev = service.set_event_budget(db, event_id, body.budget_aud, body.grant_rate)
     if ev is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
