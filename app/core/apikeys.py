@@ -2,7 +2,7 @@
 
 Audience is the DSEC committee / trusted internal tools — "trusted but
 accountable", not hostile-public hardening. Still real, because `trigger` calls
-spend OpenAI money.
+spend LLM credits.
 
 Key format: ``dsec_live_<token_urlsafe(32)>``. The plaintext **prefix** is stored
 for lookup/display; the **full key** is argon2-hashed and shown exactly once.
@@ -26,7 +26,11 @@ from app.models import APIKey
 
 _hasher = PasswordHasher()
 
-VALID_SCOPES = {"read", "trigger"}
+# read   — read-only data access, no LLM spend.
+# write  — create/update/archive workspace + domain data (no LLM spend).
+# trigger — actions that spend LLM credits (email drafting, meeting notes).
+# ingest — write DUSA weekly imports (membership / P&L) via /ingest.
+VALID_SCOPES = {"read", "write", "trigger", "ingest"}
 
 # Length of the human-facing prefix used for DB lookup, e.g. "dsec_live_a1b2c3d4".
 _PREFIX_RANDOM_LEN = 8

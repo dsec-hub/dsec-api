@@ -28,6 +28,18 @@ def test_models_create_full_schema(tmp_path):
         "sponsors",
         "finance",
         "app_user",
+        "dusa_import",
+        "members",
+        "member_report",
+        "finance_report",
+        "finance_transaction",
+        "project",
+        "task_board",
+        "task",
+        "meeting",
+        "document",
+        "usage_event",
+        "media_asset",
     } <= tables
 
 

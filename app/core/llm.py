@@ -1,4 +1,4 @@
-"""Generic OpenAI wrapper — deliberately email-agnostic so every feature reuses it.
+"""Generic Anthropic wrapper — deliberately email-agnostic so every feature reuses it.
 
 Exposes `classify` and `generate`, each returning the text alongside token usage
 and an estimated cost. Any provider error is raised as `LLMError` so callers can
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openai import OpenAI, OpenAIError
+from anthropic import Anthropic, APIError
 
 from app.config import settings
 
@@ -18,11 +18,9 @@ class LLMError(Exception):
     """Raised on any LLM provider failure. Callers catch and degrade."""
 
 
-# Rough USD per 1K tokens, used only for dashboard cost estimates. Tweak freely.
-_COST_PER_1K = {
-    "gpt-4o-mini": 0.00015,
-    "gpt-4o": 0.005,
-}
+# Claude Haiku 4.5 pricing: $1.00/1M input, $5.00/1M output
+_INPUT_COST_PER_1K = 0.001
+_OUTPUT_COST_PER_1K = 0.005
 
 
 @dataclass
@@ -33,47 +31,56 @@ class LLMResult:
     model: str
 
 
-_client: OpenAI | None = None
+_client: Anthropic | None = None
 
 
-def _get_client() -> OpenAI:
-    """Lazily build the OpenAI client (no network at import time)."""
+def _get_client() -> Anthropic:
     global _client
     if _client is None:
-        if not settings.OPENAI_API_KEY:
-            raise LLMError("OPENAI_API_KEY is not configured")
-        _client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        if not settings.ANTHROPIC_API_KEY:
+            raise LLMError("ANTHROPIC_API_KEY is not configured")
+        _client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     return _client
 
 
-def _estimate_cost(model: str, tokens: int) -> float:
-    rate = _COST_PER_1K.get(model, 0.0005)
-    return round((tokens / 1000) * rate, 6)
+def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    return round(
+        (input_tokens / 1000) * _INPUT_COST_PER_1K
+        + (output_tokens / 1000) * _OUTPUT_COST_PER_1K,
+        6,
+    )
 
 
-def _chat(system_prompt: str, user_content: str, model: str) -> LLMResult:
+def _chat(system_prompt: str, user_content: str, *, max_tokens: int) -> LLMResult:
+    model = settings.ANTHROPIC_MODEL
     try:
-        resp = _get_client().chat.completions.create(
+        resp = _get_client().messages.create(
             model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.4,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
         )
-    except OpenAIError as exc:  # network, auth, rate-limit, etc.
+    except APIError as exc:
         raise LLMError(str(exc)) from exc
 
-    text = (resp.choices[0].message.content or "").strip()
-    tokens = resp.usage.total_tokens if resp.usage else 0
-    return LLMResult(text=text, tokens=tokens, cost=_estimate_cost(model, tokens), model=model)
+    text = (resp.content[0].text if resp.content else "").strip()
+    input_tokens = resp.usage.input_tokens
+    output_tokens = resp.usage.output_tokens
+    total_tokens = input_tokens + output_tokens
+    return LLMResult(
+        text=text,
+        tokens=total_tokens,
+        cost=_estimate_cost(input_tokens, output_tokens),
+        model=model,
+    )
 
 
 def classify(system_prompt: str, user_content: str, model: str | None = None) -> LLMResult:
     """Cheap-model triage. Returns an `LLMResult` whose `text` is the label."""
-    return _chat(system_prompt, user_content, model or settings.OPENAI_CLASSIFY_MODEL)
+    # model param kept for API compatibility but ignored — always uses ANTHROPIC_MODEL
+    return _chat(system_prompt, user_content, max_tokens=512)
 
 
 def generate(system_prompt: str, user_content: str, model: str | None = None) -> LLMResult:
     """Drafting / generation. Returns an `LLMResult` with the produced text."""
-    return _chat(system_prompt, user_content, model or settings.OPENAI_DRAFT_MODEL)
+    return _chat(system_prompt, user_content, max_tokens=4096)

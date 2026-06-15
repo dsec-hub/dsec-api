@@ -1,6 +1,6 @@
 """Cheap heuristic spam / no-reply gate. **No LLM call.**
 
-This is the cost guard: nothing reaches OpenAI until it passes. Pure string
+This is the cost guard: nothing reaches the LLM until it passes. Pure string
 heuristics only — keyword blocklist, marketing markers, no-reply senders, and
 length checks. Returns a reason when the message should be ignored.
 """

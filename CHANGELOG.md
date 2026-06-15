@@ -7,6 +7,70 @@ follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 ## [Unreleased]
 
 ### Added
+- **Post-event reviews (Tally)** — each event can spin up a short, plain-language
+  feedback form in **Tally** (rating + what went well + what to improve). New
+  self-contained `features/reviews/` (Tally HTTP client, declarative question
+  template, service, schemas) mounted on the events resource:
+  `POST /events-api/{id}/review-form` (scope `write`, idempotent, `?force=` to
+  recreate), `GET /events-api/{id}/review-form` (status + live response count),
+  `GET /events-api/{id}/review-form/responses` (submissions mapped to the
+  template, with average rating). `events` gains `review_form_id`,
+  `review_form_url`, `review_form_created_at`. Two MCP tools added
+  (`create_event_review_form`, `get_event_review_responses`). New env:
+  `TALLY_API_KEY`, `TALLY_API_BASE` (server-side only; blank disables → 503).
+- **Inbound email capture** — `POST /ingest/email` (scope: `ingest`) records every
+  inbound email to the `EventLog` with **no LLM spend and no triage** — a dumb,
+  idempotent capture (dedup on Gmail `message_id`; a re-send returns
+  `status="duplicate"` with `200`). The spam-gate/classify/draft pipeline at
+  `/email/process` is layered on later. New Apps Script in
+  `integrations/email-capture-forwarder/` fires it on a 15-minute trigger from the
+  Gmail mailbox (shares the existing `ingest`-scoped key).
+- **Image media** — `media_asset` table + `/media` feature (scope-gated:
+  `read` to list, `write` to upload/patch/delete) for events & projects.
+  Already-cropped uploads are processed with Pillow into a compressed **WebP**
+  (display) and a **PNG** (download), stored in **Supabase Storage** (public
+  bucket; service-role key server-side only), with just URLs + metadata in Neon.
+  The public `/website` feed now serves each project/event's `image` (primary
+  webp), `download` (primary png), and full `media[]` list so dsec-website can
+  render real imagery. New env: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+  `SUPABASE_STORAGE_BUCKET`, `MEDIA_MAX_UPLOAD_BYTES`, `MEDIA_MAX_DIMENSION`.
+- **MCP server** — the whole workspace is exposed over MCP (Model Context
+  Protocol) at `/mcp`, so the exec can manage the club from Claude/ChatGPT
+  without the dashboard. 30 scope-gated tools (members, finance, events,
+  projects, tasks, meetings, documents, sponsors, people) authenticated by API
+  key via a pure-ASGI middleware that stamps the key's scopes into a contextvar.
+  A setup guide + machine-readable info live at `/mcp-setup`. Adds the `write`
+  scope (workspace writes, no LLM spend); `trigger` stays for LLM actions.
+- **Workspace features** — REST CRUD (service + router + schemas, same pattern as
+  the club-domain tables, all scope-gated) for **projects** (community showcase,
+  auto-slug, public/featured flags), **tasks** (Trello-style boards + cards with
+  move/reorder and auto-`completed_at`), **meetings**, **documents** (Notion-style
+  markdown docs with nesting + per-person deliverables), **sponsors** (CRM
+  pipeline), **events**, and **people**. New tables: `project`, `task_board`,
+  `task`, `meeting`, `document`; `events` gains `budget_aud`/`grant_aud` and
+  `sponsors` gains CRM fields.
+- **Meeting-notes AI** — `POST /meetings/{id}/generate-notes` (scope `trigger`)
+  turns a transcript into summary + markdown minutes + action items via the
+  shared LLM wrapper (same cost cap as the email agent) and files a MeetingNotes
+  document.
+- **Finance budgets** — `POST /finance/events/{id}/budget` sets an event budget
+  and auto-applies a 50% grant; `GET /finance/summary` gives the weekly headline
+  (opening/income/expense/closing + total event budgets/grants).
+- **Public website feed** — no-auth, per-IP-rate-limited `/website/{projects,events,stats}`
+  serving only published data, so the marketing site can show live projects,
+  events, and real social-proof stats (live member count, balance) instead of
+  hardcoded placeholders.
+- **DUSA weekly imports** — `POST /ingest/dusa` (scope `ingest`) receives the two
+  weekly DUSA spreadsheets (membership report + Profit & Loss), parses them
+  server-side with `openpyxl`, and lands them in Neon. Idempotent on the Gmail
+  `message_id` (re-send → `409`). New tables: `dusa_import` (dedup + audit),
+  `members` (roster, upserted by student id; `is_current` tracks the latest
+  report), `member_report` (weekly stats), `finance_report` + `finance_transaction`
+  (P&L snapshots, DUSA sign convention preserved). Adds the `ingest` API-key scope
+  and `scripts/create_api_key.py`. A Google Apps Script
+  (`integrations/dusa-gmail-forwarder/`) forwards the attachments from the
+  committee mailbox; it never parses Excel itself. Verified against the real
+  workbooks (92 members, 65 DUSA; P&L opening $1970.09 → closing $1314.09).
 - **Tests** — `pytest` + FastAPI `TestClient` suite covering agent-secret auth
   (reject/accept), the email pipeline branches (spam-gate, fyi-no-reply,
   simple-reply, needs-meeting + Cal.com link, classify/draft error degradation,

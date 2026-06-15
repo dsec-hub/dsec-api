@@ -32,6 +32,20 @@ EXPECTED_TABLES = [
     "sponsors",
     "finance",
     "app_user",
+    # DUSA weekly imports (ingested from email)
+    "dusa_import",
+    "members",
+    "member_report",
+    "finance_report",
+    "finance_transaction",
+    # Workspace (tasks, projects, meetings, documents)
+    "project",
+    "task_board",
+    "task",
+    "meeting",
+    "document",
+    # Usage / activity log
+    "usage_event",
 ]
 
 

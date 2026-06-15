@@ -19,6 +19,11 @@ import tempfile
 _tmp_db = tempfile.NamedTemporaryFile(prefix="dsec_test_", suffix=".db", delete=False)
 _tmp_db.close()
 os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
+# Force storage OFF so the upload path stops at the Supabase boundary (→ 503)
+# instead of hitting real object storage. Forced (not setdefault) so a local
+# `.env` with real creds can't leak into the test process.
+os.environ["SUPABASE_URL"] = ""
+os.environ["SUPABASE_SERVICE_ROLE_KEY"] = ""
 os.environ.setdefault("AGENT_SECRET", "test-agent-secret")
 os.environ.setdefault("DASHBOARD_USER", "admin")
 os.environ.setdefault("DASHBOARD_PASS", "test-dashboard-pass")

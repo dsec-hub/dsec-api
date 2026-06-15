@@ -25,10 +25,29 @@ from app.db import run_migrations
 # Feature routers — each self-contained under features/<name>/router.py
 from app.dashboard.router import router as dashboard_router
 from app.features.admin.router import router as admin_router
+from app.features.attachments.router import router as attachments_router
 from app.features.calcom.router import router as calcom_router
 from app.features.discord.router import router as discord_router
+from app.features.documents.router import router as documents_router
 from app.features.email.router import router as email_router
+from app.features.events.router import router as events_router
+from app.features.finance.router import router as finance_router
+from app.features.ingest.router import router as ingest_router
+from app.features.media.router import router as media_router
+from app.features.mcp.auth import MCPAuthMiddleware
+from app.features.mcp.router import router as mcp_guide_router
+from app.features.mcp.server import mcp, mcp_app
+from app.features.meetings.router import router as meetings_router
+from app.features.members.router import router as members_router
+from app.features.people.router import router as people_router
+from app.features.projects.router import router as projects_router
 from app.features.public.router import router as public_router
+from app.features.reviews.router import router as reviews_router
+from app.features.sponsor_leads.router import router as sponsor_leads_router
+from app.features.sponsor_packages.router import router as sponsor_packages_router
+from app.features.sponsors.router import router as sponsors_router
+from app.features.tasks.router import router as tasks_router
+from app.features.website.router import router as website_router
 
 logging.basicConfig(level=logging.INFO)
 _logger = logging.getLogger("dsec")
@@ -41,7 +60,10 @@ async def lifespan(app: FastAPI):
     if settings.RUN_MIGRATIONS_ON_STARTUP:
         run_migrations()
     _logger.info("DSEC agent API started (db=%s)", settings.DATABASE_URL.split("@")[-1])
-    yield
+    # The mounted MCP app needs its session manager running for the lifetime of
+    # the process (it powers /mcp). Stateless HTTP, so safe on serverless.
+    async with mcp.session_manager.run():
+        yield
     # Shutdown: nothing to tear down (no persistent in-process state).
 
 
@@ -64,10 +86,32 @@ def create_app() -> FastAPI:
     # --- Mount features. One line each; order is cosmetic. ---
     app.include_router(email_router, prefix="/email", tags=["email"])
     app.include_router(public_router, prefix="/public", tags=["public"])
+    app.include_router(ingest_router, prefix="/ingest", tags=["ingest"])
+    app.include_router(events_router, prefix="/events-api", tags=["events"])
+    # Reviews extend the events resource: /events-api/{event_id}/review-form (Tally).
+    app.include_router(reviews_router, prefix="/events-api", tags=["reviews"])
+    app.include_router(media_router, prefix="/media", tags=["media"])
+    app.include_router(attachments_router, prefix="/attachments", tags=["attachments"])
+    app.include_router(people_router, prefix="/people", tags=["people"])
+    app.include_router(projects_router, prefix="/projects", tags=["projects"])
+    app.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
+    app.include_router(meetings_router, prefix="/meetings", tags=["meetings"])
+    app.include_router(documents_router, prefix="/documents", tags=["documents"])
+    app.include_router(sponsors_router, prefix="/sponsors", tags=["sponsors"])
+    app.include_router(sponsor_packages_router, prefix="/sponsor-packages", tags=["sponsor-packages"])
+    app.include_router(sponsor_leads_router, prefix="/sponsor-leads", tags=["sponsor-leads"])
+    app.include_router(finance_router, prefix="/finance", tags=["finance"])
+    app.include_router(members_router, prefix="/members", tags=["members"])
+    app.include_router(website_router, prefix="/website", tags=["website"])
+    app.include_router(mcp_guide_router, prefix="/mcp-setup", tags=["mcp"])
     app.include_router(admin_router, prefix="/admin", tags=["admin"])
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
     app.include_router(discord_router, prefix="/discord", tags=["discord"])
     app.include_router(calcom_router, prefix="/calcom", tags=["calcom"])
+
+    # Mount the MCP server (Starlette sub-app) behind API-key auth. Clients
+    # connect to /mcp; the setup guide lives at /mcp-setup.
+    app.mount("/mcp", MCPAuthMiddleware(mcp_app))
 
     @app.get("/health", tags=["meta"])
     def health() -> dict:
