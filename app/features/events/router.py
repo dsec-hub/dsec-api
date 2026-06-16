@@ -13,6 +13,8 @@ from app.models import APIKey
 
 from . import relations, service
 from .schemas import (
+    EventConnectionLink,
+    EventConnectionOut,
     EventCreate,
     EventOut,
     EventPartnerLink,
@@ -262,3 +264,71 @@ def unlink_event_partner(
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if not relations.unlink_partner(db, event_id, partner_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "partner link not found")
+
+
+def _connection_out(link, other, *, event_id: int) -> EventConnectionOut:
+    """Shape a (link, other_event) pair into the response, resolved relative to
+    the event it was queried from."""
+    return EventConnectionOut(
+        id=link.id,
+        event_id=event_id,
+        other_event_id=other.id,
+        other_event_name=other.name,
+        other_event_status=other.status,
+        other_event_start_date=other.start_date,
+        label=link.label,
+        created_at=link.created_at,
+        updated_at=link.updated_at,
+    )
+
+
+@router.get("/{event_id}/connections", response_model=list[EventConnectionOut])
+def list_event_connections(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> list[EventConnectionOut]:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    return [
+        _connection_out(link, other, event_id=event_id)
+        for link, other in relations.list_connections(db, event_id)
+    ]
+
+
+@router.post("/{event_id}/connections", response_model=EventConnectionOut,
+             status_code=status.HTTP_201_CREATED)
+def link_event_connection(
+    event_id: int,
+    body: EventConnectionLink,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> EventConnectionOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    try:
+        result = relations.link_connection(
+            db, event_id, body.other_event_id, label=body.label
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event to connect not found")
+    link, other = result
+    return _connection_out(link, other, event_id=event_id)
+
+
+@router.delete("/{event_id}/connections/{other_event_id}",
+               status_code=status.HTTP_204_NO_CONTENT)
+def unlink_event_connection(
+    event_id: int,
+    other_event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> None:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    if not relations.unlink_connection(db, event_id, other_event_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "connection not found")

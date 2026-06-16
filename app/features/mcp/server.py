@@ -27,6 +27,7 @@ from app.features.documents.schemas import DocumentCreate, DocumentOut, Document
 from app.features.events import relations as events_relations
 from app.features.events import service as events_service
 from app.features.events.schemas import (
+    EventConnectionOut,
     EventCreate,
     EventOut,
     EventPartnerOut,
@@ -425,6 +426,59 @@ def unlink_event_partner(event_id: int, partner_id: int) -> dict:
         if not events_relations.unlink_partner(db, event_id, partner_id):
             raise ValueError("partner link not found")
         return {"unlinked": True, "event_id": event_id, "partner_id": partner_id}
+
+
+def _connection_dict(link, other, event_id: int) -> dict:
+    """Shape a (link, other_event) pair into a JSON dict, resolved relative to
+    the event it was queried from."""
+    return EventConnectionOut(
+        id=link.id, event_id=event_id, other_event_id=other.id,
+        other_event_name=other.name, other_event_status=other.status,
+        other_event_start_date=other.start_date, label=link.label,
+        created_at=link.created_at, updated_at=link.updated_at,
+    ).model_dump(mode="json")
+
+
+@mcp.tool()
+def list_event_connections(event_id: int) -> list[dict]:
+    """List events visibly connected to this one (symmetric, visual-only links
+    used to show how events relate, e.g. a series or a kickoff→closing pair)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        _require(events_service.get_event(db, event_id), "event not found")
+        return [
+            _connection_dict(link, other, event_id)
+            for link, other in events_relations.list_connections(db, event_id)
+        ]
+
+
+@mcp.tool()
+def link_event_connection(event_id: int, other_event_id: int,
+                          label: str | None = None) -> dict:
+    """Connect two events so each shows the other as related. Idempotent — re-linking
+    just updates the `label` (an optional relation tag, e.g. 'Series'). Purely
+    visual: it changes no behaviour, just how events are shown to relate."""
+    require_scope("write")
+    with SessionLocal() as db:
+        _require(events_service.get_event(db, event_id), "event not found")
+        try:
+            result = events_relations.link_connection(
+                db, event_id, other_event_id, label=label
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc))
+        link, other = _require(result, "event to connect not found")
+        return _connection_dict(link, other, event_id)
+
+
+@mcp.tool()
+def unlink_event_connection(event_id: int, other_event_id: int) -> dict:
+    """Remove the connection between two events (order-independent)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        if not events_relations.unlink_connection(db, event_id, other_event_id):
+            raise ValueError("connection not found")
+        return {"unlinked": True, "event_id": event_id, "other_event_id": other_event_id}
 
 
 # --------------------------------------------------------------------------- #

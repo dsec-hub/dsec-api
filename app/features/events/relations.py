@@ -13,11 +13,12 @@ that hang off an event:
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     Event,
+    EventConnection,
     EventPartner,
     EventSpeaker,
     EventSponsor,
@@ -181,6 +182,87 @@ def unlink_partner(db: Session, event_id: int, partner_id: int) -> bool:
     row = db.execute(
         select(EventPartner).where(
             EventPartner.event_id == event_id, EventPartner.partner_id == partner_id
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# event connections (event_connection) — symmetric, visual-only event<->event
+# --------------------------------------------------------------------------- #
+
+def _canonical_pair(a: int, b: int) -> tuple[int, int]:
+    """A connection is symmetric, so a pair is stored canonically with the
+    smaller id first — giving each pair exactly one row."""
+    return (a, b) if a <= b else (b, a)
+
+
+def list_connections(db: Session, event_id: int) -> list[tuple[EventConnection, Event]]:
+    """Every event connected to `event_id`, as (link, other_event) pairs. The
+    "other" side is whichever column isn't `event_id` (the link is symmetric).
+    Archived events are skipped so the dashboard never shows a dangling link."""
+    links = db.execute(
+        select(EventConnection)
+        .where(
+            EventConnection.archived.is_(False),
+            or_(
+                EventConnection.event_a_id == event_id,
+                EventConnection.event_b_id == event_id,
+            ),
+        )
+        .order_by(EventConnection.id)
+    ).scalars().all()
+    out: list[tuple[EventConnection, Event]] = []
+    for link in links:
+        other_id = link.event_b_id if link.event_a_id == event_id else link.event_a_id
+        other = db.get(Event, other_id)
+        if other is not None and not other.archived:
+            out.append((link, other))
+    return out
+
+
+def link_connection(
+    db: Session,
+    event_id: int,
+    other_event_id: int,
+    *,
+    label: str | None = None,
+) -> tuple[EventConnection, Event] | None:
+    """Idempotently connect two events. Returns (link, other_event), or None if
+    the other event doesn't exist. Raises ValueError if an event is connected to
+    itself. Re-linking an existing pair just updates the label."""
+    if event_id == other_event_id:
+        raise ValueError("an event can't be connected to itself")
+    other = db.get(Event, other_event_id)
+    if other is None:
+        return None
+    a_id, b_id = _canonical_pair(event_id, other_event_id)
+    row = db.execute(
+        select(EventConnection).where(
+            EventConnection.event_a_id == a_id, EventConnection.event_b_id == b_id
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = EventConnection(event_a_id=a_id, event_b_id=b_id)
+        db.add(row)
+    row.archived = False
+    if label is not None:
+        row.label = label
+    db.commit()
+    db.refresh(row)
+    return row, other
+
+
+def unlink_connection(db: Session, event_id: int, other_event_id: int) -> bool:
+    """Hard-delete the connection between two events (order-independent)."""
+    a_id, b_id = _canonical_pair(event_id, other_event_id)
+    row = db.execute(
+        select(EventConnection).where(
+            EventConnection.event_a_id == a_id, EventConnection.event_b_id == b_id
         )
     ).scalar_one_or_none()
     if row is None:

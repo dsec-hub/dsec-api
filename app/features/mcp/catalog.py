@@ -100,6 +100,12 @@ CATALOG: tuple[Tool, ...] = (
          "Link a partner org to an event (idempotent)."),
     Tool("unlink_event_partner", "write", "Event line-up",
          "Remove a partner org from an event."),
+    Tool("list_event_connections", "read", "Event line-up",
+         "List events visibly connected to this one (related-events links)."),
+    Tool("link_event_connection", "write", "Event line-up",
+         "Connect two events so each shows the other as related (visual-only)."),
+    Tool("unlink_event_connection", "write", "Event line-up",
+         "Remove the connection between two events."),
 
     # ---- Partners --------------------------------------------------------- #
     Tool("list_partners", "read", "Partners",

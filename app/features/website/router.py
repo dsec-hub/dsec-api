@@ -12,7 +12,7 @@ import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.ratelimit import limiter
@@ -22,6 +22,7 @@ from app.features.media import service as media_service
 from app.features.projects import service as projects_service
 from app.models import (
     Event,
+    EventConnection,
     EventPartner,
     EventSpeaker,
     EventSponsor,
@@ -43,6 +44,7 @@ from .schemas import (
     PublicMedia,
     PublicPerson,
     PublicProject,
+    PublicRelatedEvent,
     PublicSpeaker,
     PublicSponsor,
     PublicSponsorPackage,
@@ -263,6 +265,46 @@ def _event_slug(e: Event) -> str:
     )
 
 
+def _related_events(db: Session, e: Event, *, today: date) -> list[PublicRelatedEvent]:
+    """Events visibly connected to this one. Only *published*, dated, non-archived
+    events surface (so every link resolves to a live page — drafts never leak).
+    The relation is symmetric, so the "other" side is whichever column isn't this
+    event. Newest first."""
+    links = db.execute(
+        select(EventConnection).where(
+            EventConnection.archived.is_(False),
+            or_(
+                EventConnection.event_a_id == e.id,
+                EventConnection.event_b_id == e.id,
+            ),
+        )
+    ).scalars().all()
+    if not links:
+        return []
+    label_by_other: dict[int, str | None] = {}
+    for link in links:
+        other_id = link.event_b_id if link.event_a_id == e.id else link.event_a_id
+        label_by_other[other_id] = link.label
+    others = db.execute(
+        select(Event).where(
+            Event.id.in_(list(label_by_other.keys())),
+            Event.archived.is_(False),
+            Event.is_public.is_(True),
+            Event.start_date.is_not(None),
+        )
+    ).scalars().all()
+    others.sort(key=lambda o: o.start_date or date.min, reverse=True)
+    return [
+        PublicRelatedEvent(
+            slug=_event_slug(o),
+            title=o.name,
+            label=label_by_other.get(o.id),
+            upcoming=bool(o.start_date and o.start_date >= today),
+        )
+        for o in others
+    ]
+
+
 def _public_event(
     e: Event,
     assets: list[MediaAsset],
@@ -272,6 +314,7 @@ def _public_event(
     speakers: list[PublicSpeaker] | None = None,
     sponsors: list[PublicEventSponsor] | None = None,
     partners: list[PublicEventPartner] | None = None,
+    related_events: list[PublicRelatedEvent] | None = None,
 ) -> PublicEvent:
     image, download, media = _media_block(assets)
     # An event auto-completes once its start date passes; its ticketing (link +
@@ -293,6 +336,7 @@ def _public_event(
         speakers=speakers or [],
         sponsors=sponsors or [],
         partners=partners or [],
+        related_events=related_events or [],
     )
 
 
@@ -344,13 +388,14 @@ def public_event(slug: str, request: Request, db: Session = Depends(get_db)) -> 
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
     assets = media_service.list_media(db, entity_type="event", entity_id=match.id)
     lead = _leads_map(db, [match.event_lead_id]).get(match.event_lead_id)
-    # Speakers/sponsors/partners are only loaded on the detail page (keeps the
-    # list lean).
+    # Speakers/sponsors/partners/related events are only loaded on the detail
+    # page (keeps the list lean).
     return _public_event(
         match, assets, today=today, lead=lead,
         speakers=_event_speakers(db, match.id),
         sponsors=_event_sponsors(db, match.id),
         partners=_event_partners(db, match.id),
+        related_events=_related_events(db, match, today=today),
     )
 
 

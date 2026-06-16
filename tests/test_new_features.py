@@ -107,6 +107,57 @@ def test_event_speakers_and_links(client, rw_key):
     assert len(client.get(f"/events-api/{eid}/partners", headers=_h(rw_key)).json()) == 1
 
 
+def test_event_connections(client, rw_key, ro_key):
+    a = client.post("/events-api", json={"name": "Kickoff Night", "start_date": "2026-09-01",
+                                         "is_public": True}, headers=_h(rw_key)).json()
+    b = client.post("/events-api", json={"name": "Closing Gala", "start_date": "2026-11-01",
+                                         "is_public": True}, headers=_h(rw_key)).json()
+    aid, bid = a["id"], b["id"]
+
+    # write-gated; can't connect to a missing event; can't connect to itself
+    assert client.post(f"/events-api/{aid}/connections", json={"other_event_id": bid},
+                       headers=_h(ro_key)).status_code == 403
+    assert client.post(f"/events-api/{aid}/connections", json={"other_event_id": 9999},
+                       headers=_h(rw_key)).status_code == 404
+    assert client.post(f"/events-api/{aid}/connections", json={"other_event_id": aid},
+                       headers=_h(rw_key)).status_code == 422
+
+    # connect A -> B with a label
+    r = client.post(f"/events-api/{aid}/connections",
+                    json={"other_event_id": bid, "label": "Series"}, headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["other_event_id"] == bid and r.json()["label"] == "Series"
+
+    # symmetric: B sees A too (order-independent), resolved relative to B
+    from_b = client.get(f"/events-api/{bid}/connections", headers=_h(ro_key)).json()
+    assert len(from_b) == 1 and from_b[0]["other_event_id"] == aid
+    assert from_b[0]["other_event_name"] == "Kickoff Night"
+
+    # idempotent re-link from the other side updates the label — no duplicate row
+    client.post(f"/events-api/{bid}/connections",
+                json={"other_event_id": aid, "label": "Follow-up"}, headers=_h(rw_key))
+    from_a = client.get(f"/events-api/{aid}/connections", headers=_h(rw_key)).json()
+    assert len(from_a) == 1 and from_a[0]["label"] == "Follow-up"
+
+    # published connections surface on the public website feed
+    feed = client.get("/website/events").json()
+    slug_a = next(e["slug"] for e in feed if e["title"] == "Kickoff Night")
+    detail = client.get(f"/website/events/{slug_a}").json()
+    assert [e["title"] for e in detail["related_events"]] == ["Closing Gala"]
+
+    # a DRAFT connected event shows in the dashboard but never leaks to the public feed
+    c = client.post("/events-api", json={"name": "Secret Planning", "start_date": "2026-10-01"},
+                    headers=_h(rw_key)).json()  # is_public defaults to False
+    client.post(f"/events-api/{aid}/connections", json={"other_event_id": c["id"]}, headers=_h(rw_key))
+    detail = client.get(f"/website/events/{slug_a}").json()
+    assert [e["title"] for e in detail["related_events"]] == ["Closing Gala"]  # draft excluded
+    assert len(client.get(f"/events-api/{aid}/connections", headers=_h(rw_key)).json()) == 2  # dashboard sees both
+
+    # unlink is order-independent and hard-deletes
+    assert client.delete(f"/events-api/{aid}/connections/{bid}", headers=_h(rw_key)).status_code == 204
+    assert client.get(f"/events-api/{bid}/connections", headers=_h(rw_key)).json() == []
+
+
 # --------------------------------------------------------------------------- #
 # REST: sponsor contacts
 # --------------------------------------------------------------------------- #
@@ -181,6 +232,7 @@ def test_mcp_registry_includes_new_tools():
         "add_event_speaker", "list_event_speakers", "remove_event_speaker",
         "link_event_sponsor", "unlink_event_sponsor",
         "link_event_partner", "unlink_event_partner",
+        "list_event_connections", "link_event_connection", "unlink_event_connection",
         "list_sponsor_contacts", "add_sponsor_contact",
         "list_sponsor_packages", "create_sponsor_package", "update_sponsor_package",
         "delete_sponsor_package", "list_sponsor_leads", "update_sponsor_lead",
@@ -201,6 +253,23 @@ def test_mcp_event_publish_and_lineup(db):
         sp = mcpserver.add_event_speaker(ev["id"], name="Grace Hopper", title="Rear Admiral")
         assert sp["name"] == "Grace Hopper"
         assert len(mcpserver.list_event_speakers(ev["id"])) == 1
+
+
+def test_mcp_event_connections(db):
+    with as_key(["read", "write"]):
+        a = mcpserver.create_event(name="Hack A", start_date="2026-09-01")
+        b = mcpserver.create_event(name="Hack B", start_date="2026-09-08")
+        link = mcpserver.link_event_connection(a["id"], b["id"], label="Series")
+        assert link["other_event_id"] == b["id"] and link["label"] == "Series"
+        # symmetric: visible from B, resolved relative to B
+        from_b = mcpserver.list_event_connections(b["id"])
+        assert len(from_b) == 1 and from_b[0]["other_event_id"] == a["id"]
+        # self-connection rejected
+        with pytest.raises(ValueError):
+            mcpserver.link_event_connection(a["id"], a["id"])
+        # unlink is order-independent
+        mcpserver.unlink_event_connection(b["id"], a["id"])
+        assert mcpserver.list_event_connections(a["id"]) == []
 
 
 def test_mcp_sponsor_packages_and_contacts(db):

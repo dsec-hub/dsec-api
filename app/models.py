@@ -1026,6 +1026,43 @@ class EventPartner(Base):
     )
 
 
+class EventConnection(Base):
+    """A symmetric, visual-only link between two events ("these events are
+    related" — e.g. a series, a follow-up, a kickoff→closing pair).
+
+    The link carries no behaviour: it just lets the dashboard and the public
+    site show how events relate. It is *symmetric* — one row covers both
+    directions — so the pair is stored canonically with ``event_a_id <
+    event_b_id`` (enforced in the app layer) and de-duplicated by the UNIQUE
+    constraint. Hard-deleted on unlink (like ``event_sponsor``/``event_partner``)
+    so the slot frees up and the same pair can be re-linked later.
+    """
+
+    __tablename__ = "event_connection"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Canonical ordering: event_a_id is always the smaller of the two ids, so a
+    # given pair has exactly one row regardless of which event it was added from.
+    event_a_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    event_b_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    # Optional free-text label shown on both events, e.g. "Series" / "Follow-up".
+    label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("event_a_id", "event_b_id", name="uq_event_connection"),
+    )
+
+
 # =============================================================================
 # Attachments (uploaded files — PDFs & images — for sponsors etc.)
 # =============================================================================

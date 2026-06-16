@@ -106,6 +106,16 @@ class PublicSponsor(BaseModel):
     logo_png: str | None
 
 
+class PublicRelatedEvent(BaseModel):
+    """A published event linked to this one (a visual-only relation). Carries
+    just enough to render a clickable list item on the event page."""
+
+    slug: str
+    title: str
+    label: str | None       # optional relation label, e.g. "Series"
+    upcoming: bool
+
+
 class PublicEvent(BaseModel):
     slug: str
     title: str
@@ -127,6 +137,7 @@ class PublicEvent(BaseModel):
     speakers: list[PublicSpeaker] = []
     sponsors: list[PublicEventSponsor] = []
     partners: list[PublicEventPartner] = []
+    related_events: list[PublicRelatedEvent] = []
 
 
 class SiteStats(BaseModel):

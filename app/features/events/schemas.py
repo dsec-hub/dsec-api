@@ -165,3 +165,25 @@ class EventPartnerOut(BaseModel):
     sort_order: int
     created_at: datetime
     updated_at: datetime
+
+
+class EventConnectionLink(BaseModel):
+    """Connect another event to this one (a symmetric, visual-only relation)."""
+
+    other_event_id: int
+    label: str | None = None  # optional, shown on both events e.g. "Series"
+
+
+class EventConnectionOut(BaseModel):
+    """One connection, resolved relative to the event it was queried from:
+    `other_event_*` describe the event on the far side of the link."""
+
+    id: int           # the connection row id
+    event_id: int     # the event this was queried from
+    other_event_id: int
+    other_event_name: str | None = None
+    other_event_status: str | None = None
+    other_event_start_date: date | None = None
+    label: str | None = None
+    created_at: datetime
+    updated_at: datetime
