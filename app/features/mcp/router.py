@@ -7,8 +7,11 @@ authenticated.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import PlainTextResponse
+
+from .catalog import SCOPE_SUMMARY, tools_by_scope
+from .guide import build_llm_guide
 
 router = APIRouter()
 
@@ -67,36 +70,18 @@ Ask your assistant things like:
 - "Here's our meeting transcript: … — generate minutes and action items."
 - "Draft a deliverables doc for Alex covering the website refresh."
 
+## Teaching your AI assistant
+Want the assistant to know exactly which tools your key can use and the house
+rules? Download a tailored **`llm.md`** guide from **Settings → API & MCP** (it's
+generated when you mint a token, or per-token), or fetch it from
+`{SERVER_URL.rsplit('/', 1)[0]}/mcp-setup/llm?scopes=read,write`. It contains no
+secret — paste it into your assistant alongside the connection above.
+
 ## Notes
 - Everything writes to the club's single source of truth (Neon), so changes show
   up in the dashboard and (for public projects/events) on the website.
 - AI features and writes are rate-limited and cost-capped server-side.
 """
-
-# Short list of what's available, for clients that want structured info.
-TOOLS = {
-    "read": [
-        "whoami", "list_members", "member_stats", "finance_summary", "list_transactions",
-        "list_events", "list_event_speakers", "list_event_sponsors", "list_event_partners",
-        "get_event_review_responses", "list_projects", "list_partners", "list_boards",
-        "list_tasks", "list_meetings", "list_documents", "get_document", "list_sponsors",
-        "list_sponsor_contacts", "list_sponsor_packages", "list_sponsor_leads", "list_people",
-        "list_media", "list_attachments",
-    ],
-    "write": [
-        "set_event_budget", "create_event", "update_event", "archive_event",
-        "create_event_review_form", "add_event_speaker", "update_event_speaker",
-        "remove_event_speaker", "link_event_sponsor", "unlink_event_sponsor",
-        "link_event_partner", "unlink_event_partner", "create_partner", "update_partner",
-        "create_project", "update_project", "create_board", "create_task", "update_task",
-        "move_task", "create_meeting", "create_document", "update_document",
-        "create_sponsor", "update_sponsor", "add_sponsor_contact", "update_sponsor_contact",
-        "remove_sponsor_contact", "create_sponsor_package", "update_sponsor_package",
-        "delete_sponsor_package", "update_sponsor_lead", "create_person", "update_person",
-    ],
-    "trigger": ["generate_meeting_notes"],
-}
-
 
 @router.get("", response_class=PlainTextResponse)
 def guide() -> str:
@@ -106,16 +91,30 @@ def guide() -> str:
 
 @router.get("/info")
 def info() -> dict:
-    """Machine-readable connection info + the tools grouped by required scope."""
+    """Machine-readable connection info + the tools grouped by required scope.
+
+    The tool inventory and scope summaries come from the single catalogue in
+    `catalog.py`, so they stay in lock-step with the running server."""
     return {
         "server_url": SERVER_URL,
         "transport": "streamable-http",
         "auth": "Authorization: Bearer dsec_live_...",
-        "scopes": {
-            "read": "view all data",
-            "write": "create/update events (+speakers/sponsors/partners), projects, "
-                     "tasks, docs, sponsors (+packages/leads/contacts), partners, people",
-            "trigger": "AI features (meeting notes)",
-        },
-        "tools": TOOLS,
+        "scopes": {k: SCOPE_SUMMARY[k] for k in ("read", "write", "trigger")},
+        "tools": tools_by_scope(),
     }
+
+
+@router.get("/llm", response_class=PlainTextResponse)
+def llm_guide(
+    scopes: str = Query(
+        "read,write,trigger",
+        description="Comma-separated scopes the key holds, e.g. 'read,write'.",
+    ),
+    label: str | None = Query(None, description="Optional name to personalise the guide."),
+) -> PlainTextResponse:
+    """Render an `llm.md` — an instruction guide for an AI assistant — tailored
+    to the scopes a key carries. Contains no secret (the key is a placeholder),
+    so it's safe to serve unauthenticated and to commit/share."""
+    requested = {s.strip() for s in scopes.split(",") if s.strip()}
+    md = build_llm_guide(requested, server_url=SERVER_URL, label=label)
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")

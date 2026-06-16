@@ -40,6 +40,40 @@ def test_tool_registry_covers_features():
     assert len(names) >= 25
 
 
+def test_catalog_matches_registered_tools():
+    """The hand-written catalogue (catalog.py) must list exactly the tools the
+    FastMCP server registers — otherwise the /info inventory and the per-key
+    LLM guide would silently drift from reality."""
+    from app.features.mcp import catalog
+
+    registered = {t.name for t in asyncio.run(mcpserver.mcp.list_tools())}
+    assert catalog.all_tool_names() == registered
+
+
+def test_llm_guide_is_scope_aware():
+    from app.features.mcp.guide import build_llm_guide
+
+    url = "https://api.dsec.club/mcp"
+    banner = "This key is **read-only**"
+    read_only = build_llm_guide({"read"}, server_url=url)
+    assert banner in read_only                  # read-only callout shown
+    assert "list_events" in read_only           # a read tool is documented
+    assert "create_event" not in read_only      # a write tool is hidden
+    assert "dsec_live_YOUR_KEY" in read_only     # placeholder, never a live key
+
+    full = build_llm_guide({"read", "write", "trigger"}, server_url=url)
+    assert "create_event" in full
+    assert "generate_meeting_notes" in full
+    assert banner not in full                    # no read-only callout when writable
+
+
+def test_llm_guide_endpoint(client):
+    r = client.get("/mcp-setup/llm", params={"scopes": "read,write"})
+    assert r.status_code == 200
+    assert "text/markdown" in r.headers["content-type"]
+    assert "DSEC workspace" in r.text
+
+
 def test_whoami_reports_scopes():
     with as_key(["read", "write"]):
         who = mcpserver.whoami()
