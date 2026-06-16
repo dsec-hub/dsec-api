@@ -22,11 +22,13 @@ from app.features.media import service as media_service
 from app.features.projects import service as projects_service
 from app.models import (
     Event,
+    EventPartner,
     EventSpeaker,
     EventSponsor,
     FinanceReport,
     MediaAsset,
     Member,
+    Partner,
     Person,
     Project,
     Sponsor,
@@ -35,6 +37,7 @@ from app.models import (
 
 from .schemas import (
     PublicEvent,
+    PublicEventPartner,
     PublicEventSponsor,
     PublicLead,
     PublicMedia,
@@ -108,7 +111,13 @@ def _leads_map(db: Session, person_ids: list[int | None]) -> dict[int, PublicLea
 
 
 def _event_speakers(db: Session, event_id: int) -> list[PublicSpeaker]:
-    """Speakers for an event, with their headshots, resolving linked-person names."""
+    """Speakers for an event, with their headshots, resolving linked-person names.
+
+    Photo precedence: a speaker's own uploaded headshot (entity_type="speaker")
+    wins; a speaker linked to a directory person but with no own photo falls back
+    to that person's profile photo (entity_type="person"). So linking a person
+    reuses their headshot automatically, while a speaker-specific upload overrides.
+    """
     rows = db.execute(
         select(EventSpeaker)
         .where(EventSpeaker.event_id == event_id, EventSpeaker.archived.is_(False))
@@ -116,23 +125,29 @@ def _event_speakers(db: Session, event_id: int) -> list[PublicSpeaker]:
     ).scalars().all()
     if not rows:
         return []
-    # Resolve display names from linked people where the row has no free-text name.
-    person_ids = [r.person_id for r in rows if r.person_id and not r.name]
+    # Linked people: used to resolve missing display names and to fall back to
+    # their profile photo when the speaker has no own headshot.
+    linked_ids = sorted({r.person_id for r in rows if r.person_id})
     people = {
         p.id: p.name
         for p in (
-            db.execute(select(Person).where(Person.id.in_(person_ids))).scalars().all()
-            if person_ids
+            db.execute(select(Person).where(Person.id.in_(linked_ids))).scalars().all()
+            if linked_ids
             else []
         )
     }
-    photos = media_service.list_media_for(
+    speaker_photos = media_service.list_media_for(
         db, entity_type="speaker", entity_ids=[r.id for r in rows]
+    )
+    person_photos = media_service.list_media_for(
+        db, entity_type="person", entity_ids=linked_ids
     )
     out: list[PublicSpeaker] = []
     for r in rows:
         name = r.name or people.get(r.person_id or -1) or "Speaker"
-        webp, png = _role_media(photos.get(r.id, []), "photo")
+        webp, png = _role_media(speaker_photos.get(r.id, []), "photo")
+        if not webp and r.person_id:
+            webp, png = _role_media(person_photos.get(r.person_id, []), "photo")
         out.append(
             PublicSpeaker(name=name, title=r.title, bio=r.bio, photo=webp, photo_png=png)
         )
@@ -162,6 +177,38 @@ def _event_sponsors(db: Session, event_id: int) -> list[PublicEventSponsor]:
         out.append(
             PublicEventSponsor(
                 name=s.organisation, website=s.website, tier=link.tier,
+                logo=webp, logo_png=png,
+            )
+        )
+    return out
+
+
+def _event_partners(db: Session, event_id: int) -> list[PublicEventPartner]:
+    """Partners (collaborator clubs) shown publicly for an event, with their
+    logos. Only partners opted in via show_on_website appear — partners are
+    internal by default, so linking one to an event does NOT publish it."""
+    rows = db.execute(
+        select(EventPartner, Partner)
+        .join(Partner, Partner.id == EventPartner.partner_id)
+        .where(
+            EventPartner.event_id == event_id,
+            EventPartner.archived.is_(False),
+            Partner.archived.is_(False),
+            Partner.show_on_website.is_(True),
+        )
+        .order_by(EventPartner.sort_order, EventPartner.id)
+    ).all()
+    if not rows:
+        return []
+    logos = media_service.list_media_for(
+        db, entity_type="partner", entity_ids=[p.id for _link, p in rows]
+    )
+    out: list[PublicEventPartner] = []
+    for link, p in rows:
+        webp, png = _role_media(logos.get(p.id, []), "logo")
+        out.append(
+            PublicEventPartner(
+                name=p.name, website=p.website, role=link.role,
                 logo=webp, logo_png=png,
             )
         )
@@ -224,6 +271,7 @@ def _public_event(
     lead: PublicLead | None = None,
     speakers: list[PublicSpeaker] | None = None,
     sponsors: list[PublicEventSponsor] | None = None,
+    partners: list[PublicEventPartner] | None = None,
 ) -> PublicEvent:
     image, download, media = _media_block(assets)
     # An event auto-completes once its start date passes; its ticketing (link +
@@ -244,16 +292,25 @@ def _public_event(
         lead=lead,
         speakers=speakers or [],
         sponsors=sponsors or [],
+        partners=partners or [],
     )
 
 
 @router.get("/events", response_model=list[PublicEvent])
 def public_events(request: Request, db: Session = Depends(get_db)) -> list[PublicEvent]:
-    """Non-archived events with a confirmed date, soonest upcoming first."""
+    """Published, non-archived events with a confirmed date, soonest upcoming first.
+
+    Draft events (is_public=False) are hidden — they only exist in the
+    authenticated dashboard until someone publishes them.
+    """
     limiter.check_request(db, key_id=None, ip=client_ip(request))
     today = date.today()
     rows = db.execute(
-        select(Event).where(Event.archived.is_(False), Event.start_date.is_not(None))
+        select(Event).where(
+            Event.archived.is_(False),
+            Event.is_public.is_(True),
+            Event.start_date.is_not(None),
+        )
         .order_by(Event.start_date.desc())
     ).scalars().all()
     media_map = media_service.list_media_for(
@@ -272,22 +329,28 @@ def public_events(request: Request, db: Session = Depends(get_db)) -> list[Publi
 
 @router.get("/events/{slug}", response_model=PublicEvent)
 def public_event(slug: str, request: Request, db: Session = Depends(get_db)) -> PublicEvent:
-    """One event by its computed slug (matches the slugs from /website/events)."""
+    """One published event by its computed slug (matches /website/events)."""
     limiter.check_request(db, key_id=None, ip=client_ip(request))
     today = date.today()
     rows = db.execute(
-        select(Event).where(Event.archived.is_(False), Event.start_date.is_not(None))
+        select(Event).where(
+            Event.archived.is_(False),
+            Event.is_public.is_(True),
+            Event.start_date.is_not(None),
+        )
     ).scalars().all()
     match = next((e for e in rows if _event_slug(e) == slug), None)
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
     assets = media_service.list_media(db, entity_type="event", entity_id=match.id)
     lead = _leads_map(db, [match.event_lead_id]).get(match.event_lead_id)
-    # Speakers/sponsors are only loaded on the detail page (keeps the list lean).
+    # Speakers/sponsors/partners are only loaded on the detail page (keeps the
+    # list lean).
     return _public_event(
         match, assets, today=today, lead=lead,
         speakers=_event_speakers(db, match.id),
         sponsors=_event_sponsors(db, match.id),
+        partners=_event_partners(db, match.id),
     )
 
 

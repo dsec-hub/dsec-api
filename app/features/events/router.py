@@ -11,8 +11,19 @@ from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
-from . import service
-from .schemas import EventCreate, EventOut, EventUpdate
+from . import relations, service
+from .schemas import (
+    EventCreate,
+    EventOut,
+    EventPartnerLink,
+    EventPartnerOut,
+    EventSpeakerCreate,
+    EventSpeakerOut,
+    EventSpeakerUpdate,
+    EventSponsorLink,
+    EventSponsorOut,
+    EventUpdate,
+)
 
 router = APIRouter()
 
@@ -26,6 +37,7 @@ def list_events(
     type: str | None = None,
     trimester: str | None = None,
     event_lead_id: int | None = None,
+    is_public: bool | None = None,
     include_archived: bool = False,
     limit: int = Query(100, le=200),
     offset: int = 0,
@@ -35,7 +47,8 @@ def list_events(
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_events(
         db, archived=include_archived, status=status, type=type,
-        trimester=trimester, event_lead_id=event_lead_id, limit=limit, offset=offset,
+        trimester=trimester, event_lead_id=event_lead_id, is_public=is_public,
+        limit=limit, offset=offset,
     )
     return [EventOut.model_validate(r) for r in rows]
 
@@ -93,3 +106,159 @@ def archive_event(
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
     return EventOut.model_validate(event)
+
+
+# --------------------------------------------------------------------------- #
+# Event relations: speakers / sponsor links / partner links
+# --------------------------------------------------------------------------- #
+
+def _require_event(db: Session, event_id: int) -> None:
+    if not relations.event_exists(db, event_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+
+
+@router.get("/{event_id}/speakers", response_model=list[EventSpeakerOut])
+def list_speakers(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> list[EventSpeakerOut]:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    return [EventSpeakerOut.model_validate(r) for r in relations.list_speakers(db, event_id)]
+
+
+@router.post("/{event_id}/speakers", response_model=EventSpeakerOut,
+             status_code=status.HTTP_201_CREATED)
+def add_speaker(
+    event_id: int,
+    body: EventSpeakerCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> EventSpeakerOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    try:
+        speaker = relations.add_speaker(db, event_id, body.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+    return EventSpeakerOut.model_validate(speaker)
+
+
+@router.patch("/{event_id}/speakers/{speaker_id}", response_model=EventSpeakerOut)
+def update_speaker(
+    event_id: int,
+    speaker_id: int,
+    body: EventSpeakerUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> EventSpeakerOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    speaker = relations.update_speaker(db, speaker_id, body.model_dump(exclude_unset=True))
+    if speaker is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "speaker not found")
+    return EventSpeakerOut.model_validate(speaker)
+
+
+@router.delete("/{event_id}/speakers/{speaker_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_speaker(
+    event_id: int,
+    speaker_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> None:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    if relations.remove_speaker(db, speaker_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "speaker not found")
+
+
+@router.get("/{event_id}/sponsors", response_model=list[EventSponsorOut])
+def list_event_sponsors(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> list[EventSponsorOut]:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    return [EventSponsorOut.model_validate(r) for r in relations.list_event_sponsors(db, event_id)]
+
+
+@router.post("/{event_id}/sponsors", response_model=EventSponsorOut,
+             status_code=status.HTTP_201_CREATED)
+def link_event_sponsor(
+    event_id: int,
+    body: EventSponsorLink,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> EventSponsorOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    row = relations.link_sponsor(
+        db, event_id, body.sponsor_id, tier=body.tier, sort_order=body.sort_order
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "sponsor not found")
+    return EventSponsorOut.model_validate(row)
+
+
+@router.delete("/{event_id}/sponsors/{sponsor_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_event_sponsor(
+    event_id: int,
+    sponsor_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> None:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    if not relations.unlink_sponsor(db, event_id, sponsor_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "sponsor link not found")
+
+
+@router.get("/{event_id}/partners", response_model=list[EventPartnerOut])
+def list_event_partners(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> list[EventPartnerOut]:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    return [EventPartnerOut.model_validate(r) for r in relations.list_event_partners(db, event_id)]
+
+
+@router.post("/{event_id}/partners", response_model=EventPartnerOut,
+             status_code=status.HTTP_201_CREATED)
+def link_event_partner(
+    event_id: int,
+    body: EventPartnerLink,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> EventPartnerOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_event(db, event_id)
+    row = relations.link_partner(
+        db, event_id, body.partner_id, role=body.role, sort_order=body.sort_order
+    )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "partner not found")
+    return EventPartnerOut.model_validate(row)
+
+
+@router.delete("/{event_id}/partners/{partner_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unlink_event_partner(
+    event_id: int,
+    partner_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> None:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    if not relations.unlink_partner(db, event_id, partner_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "partner link not found")

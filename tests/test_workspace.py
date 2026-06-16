@@ -127,6 +127,31 @@ def test_website_feed_no_auth(client, rw_key):
     assert stats["projects_shipped"] == 1
 
 
+def test_website_events_excludes_drafts(client, rw_key, db):
+    """Draft events (is_public=False) are hidden from the public feed; published
+    ones show. New events default to draft; the dashboard publishes them."""
+    # Created via the API with no is_public → defaults to draft.
+    draft = client.post("/events-api", json={"name": "Draft Night", "start_date": "2099-03-03"},
+                        headers=_h(rw_key)).json()
+    assert draft["is_public"] is False
+    # A published event.
+    client.post("/events-api", json={"name": "Launch Night", "start_date": "2099-04-04",
+                                     "is_public": True}, headers=_h(rw_key))
+
+    titles = {e["title"] for e in client.get("/website/events").json()}  # no auth
+    assert titles == {"Launch Night"}  # draft excluded
+
+    # Publishing the draft (PATCH is_public=True) makes it appear.
+    client.patch(f"/events-api/{draft['id']}", json={"is_public": True}, headers=_h(rw_key))
+    titles = {e["title"] for e in client.get("/website/events").json()}
+    assert titles == {"Launch Night", "Draft Night"}
+
+    # The authenticated dashboard list still sees the draft regardless, and can
+    # filter to drafts only.
+    drafts = client.get("/events-api?is_public=false", headers=_h(rw_key)).json()
+    assert drafts == []  # both are published now
+
+
 def _media(db, *, entity_type, entity_id, role, webp):
     db.add(
         models.MediaAsset(
@@ -138,7 +163,7 @@ def _media(db, *, entity_type, entity_id, role, webp):
 
 
 def test_website_event_detail_includes_speakers_and_sponsors(client, db):
-    ev = models.Event(name="AI Night", start_date=date(2099, 1, 1))
+    ev = models.Event(name="AI Night", start_date=date(2099, 1, 1), is_public=True)
     person = models.Person(name="Ada Lovelace")
     sponsor = models.Sponsor(organisation="Acme", website="https://acme.test")
     db.add_all([ev, person, sponsor])
@@ -166,6 +191,37 @@ def test_website_event_detail_includes_speakers_and_sponsors(client, db):
     assert detail["sponsors"][0]["name"] == "Acme"
     assert detail["sponsors"][0]["tier"] == "Gold"
     assert detail["sponsors"][0]["logo"] == "http://x/acme.webp"
+
+
+def test_website_speaker_inherits_person_photo_with_override(client, db):
+    """A linked speaker with no own headshot falls back to the linked person's
+    profile photo; a speaker-specific photo overrides that fallback."""
+    ev = models.Event(name="Inherit Night", start_date=date(2099, 2, 2), is_public=True)
+    p_inherit = models.Person(name="Grace Hopper")  # should inherit profile photo
+    p_override = models.Person(name="Alan Turing")  # own speaker photo wins
+    db.add_all([ev, p_inherit, p_override])
+    db.commit()
+
+    sp_inherit = models.EventSpeaker(event_id=ev.id, person_id=p_inherit.id)
+    sp_override = models.EventSpeaker(event_id=ev.id, person_id=p_override.id)
+    db.add_all([sp_inherit, sp_override])
+    db.commit()
+
+    # Both people have a profile photo (entity_type="person")...
+    _media(db, entity_type="person", entity_id=p_inherit.id, role="photo", webp="http://x/grace.webp")
+    _media(db, entity_type="person", entity_id=p_override.id, role="photo", webp="http://x/alan-profile.webp")
+    # ...but only the override speaker also has their own speaker headshot.
+    _media(db, entity_type="speaker", entity_id=sp_override.id, role="photo", webp="http://x/alan-talk.webp")
+    db.commit()
+
+    slug = client.get("/website/events").json()[0]["slug"]
+    detail = client.get(f"/website/events/{slug}").json()
+    by_name = {s["name"]: s for s in detail["speakers"]}
+
+    # No own speaker photo → inherits the person's profile photo.
+    assert by_name["Grace Hopper"]["photo"] == "http://x/grace.webp"
+    # Own speaker photo wins over the person's profile photo.
+    assert by_name["Alan Turing"]["photo"] == "http://x/alan-talk.webp"
 
 
 def test_website_sponsors_wall_only_published_with_logo(client, db):

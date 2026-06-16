@@ -228,6 +228,13 @@ class Event(Base):
     review_form_created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Draft vs published. A new event starts as a draft (is_public=False) and is
+    # hidden from the public website; the dashboard flips it to published when
+    # it's ready to go live. Mirrors Project.is_public. The /website/events feed
+    # filters on this; the authenticated dashboard/MCP API sees drafts too.
+    is_public: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
@@ -738,8 +745,10 @@ class MediaAsset(Base):
 
     Binaries live in Supabase Storage (a public bucket); only URLs + metadata
     live here. Each source upload is cropped client-side, then processed by the
-    media feature into a compressed **WebP** (web display) and a **PNG**
-    (download). Polymorphic by (`entity_type`, `entity_id`) — no FK so one table
+    media feature into a compressed **WebP** (web display) and a **download**
+    copy — a JPEG for photos, a PNG for transparent logos. The download lives in
+    the ``png_*`` columns regardless of its format (its path carries the real
+    extension). Polymorphic by (`entity_type`, `entity_id`) — no FK so one table
     serves events, projects, sponsors, speakers, and people. Read by `dsec-app`
     (gallery) and the public `/website` feed (dsec-website).
     """
@@ -752,12 +761,13 @@ class MediaAsset(Base):
     role: Mapped[str] = mapped_column(String(16))  # image|poster|banner|logo|photo
     alt_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
     original_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    # Public Supabase URLs (what the apps render / link to)
+    # Public Supabase URLs (what the apps render / link to). png_url is the
+    # download copy (JPEG for photos, PNG for logos) despite the column name.
     webp_url: Mapped[str] = mapped_column(String(1024))
     png_url: Mapped[str] = mapped_column(String(1024))
     # Storage object paths within the bucket (needed to delete the objects)
     webp_path: Mapped[str] = mapped_column(String(512))
-    png_path: Mapped[str] = mapped_column(String(512))
+    png_path: Mapped[str] = mapped_column(String(512))  # download (.jpg or .png)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)  # webp size
@@ -951,6 +961,68 @@ class EventSponsor(Base):
 
     __table_args__ = (
         UniqueConstraint("event_id", "sponsor_id", name="uq_event_sponsor"),
+    )
+
+
+class Partner(Base):
+    """A collaborator club / society / external organisation that co-hosts
+    events. Deliberately lightweight — unlike `Sponsor`, a partner has NO
+    pipeline (no stage / value / packages); it is just a name, website, notes,
+    and an uploadable logo (media_asset entity_type="partner", role="logo").
+
+    Internal-only for now: surfaced on the dashboard and on the events a partner
+    is linked to, but not on the public website.
+    """
+
+    __tablename__ = "partner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256))
+    website: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Publish this partner's logo on the public events it is linked to. Off by
+    # default — partners are internal until an exec explicitly opts one in.
+    show_on_website: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+
+class EventPartner(Base):
+    """Links a partner to an event (many-to-many) so an event can list the clubs
+    it is run in collaboration with. The logo lives on the partner (media_asset
+    entity_type="partner", role="logo") and is reused across every event.
+    """
+
+    __tablename__ = "event_partner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    partner_id: Mapped[int] = mapped_column(ForeignKey("partner.id"), index=True)
+    role: Mapped[str | None] = mapped_column(String(64), nullable=True)  # optional per-event label
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "partner_id", name="uq_event_partner"),
     )
 
 

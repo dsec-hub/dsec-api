@@ -20,17 +20,33 @@ from app.core.ratelimit import limiter
 from app.db import SessionLocal
 
 # Feature services + schemas (the same layer the REST API uses)
+from app.features.attachments import service as attachments_service
+from app.features.attachments.schemas import AttachmentOut
 from app.features.documents import service as documents_service
 from app.features.documents.schemas import DocumentCreate, DocumentOut, DocumentUpdate
+from app.features.events import relations as events_relations
 from app.features.events import service as events_service
-from app.features.events.schemas import EventCreate, EventOut, EventUpdate
+from app.features.events.schemas import (
+    EventCreate,
+    EventOut,
+    EventPartnerOut,
+    EventSpeakerCreate,
+    EventSpeakerOut,
+    EventSpeakerUpdate,
+    EventSponsorOut,
+    EventUpdate,
+)
 from app.features.finance import service as finance_service
 from app.features.finance.schemas import EventBudgetOut, TransactionOut
+from app.features.media import service as media_service
+from app.features.media.schemas import MediaOut
 from app.features.meetings import service as meetings_service
 from app.features.meetings.notes import generate_meeting_notes as _gen_notes
 from app.features.meetings.schemas import MeetingCreate, MeetingOut, MeetingUpdate
 from app.features.members import service as members_service
 from app.features.members.schemas import MemberOut, MemberTrendPoint
+from app.features.partners import service as partners_service
+from app.features.partners.schemas import PartnerCreate, PartnerOut, PartnerUpdate
 from app.features.people import service as people_service
 from app.features.people.schemas import PersonCreate, PersonOut, PersonUpdate
 from app.features.projects import service as projects_service
@@ -38,18 +54,37 @@ from app.features.projects.schemas import ProjectCreate, ProjectOut, ProjectUpda
 from app.features.reviews import service as reviews_service
 from app.features.reviews.schemas import ReviewFormOut, ReviewResponsesOut
 from app.features.reviews.tally import TallyError, TallyNotConfigured
+from app.features.sponsor_leads import service as leads_service
+from app.features.sponsor_leads.schemas import SponsorLeadOut, SponsorLeadUpdate
+from app.features.sponsor_packages import service as packages_service
+from app.features.sponsor_packages.schemas import (
+    SponsorPackageCreate,
+    SponsorPackageOut,
+    SponsorPackageUpdate,
+)
+from app.features.sponsors import contacts as sponsor_contacts
 from app.features.sponsors import service as sponsors_service
-from app.features.sponsors.schemas import SponsorCreate, SponsorOut, SponsorUpdate
+from app.features.sponsors.schemas import (
+    SponsorContactCreate,
+    SponsorContactOut,
+    SponsorContactUpdate,
+    SponsorCreate,
+    SponsorOut,
+    SponsorUpdate,
+)
 from app.features.tasks import service as tasks_service
 from app.features.tasks.schemas import BoardCreate, BoardOut, TaskCreate, TaskOut, TaskUpdate
 
 from .auth import current_key, require_scope
 
 _INSTRUCTIONS = """DSEC committee workspace. Read and update the club's members,
-finances, events, community projects, task boards, meetings, documents, and
-sponsors. Call `whoami` first to see what your API key is allowed to do. Reads
-need the 'read' scope; creating/updating needs 'write'; AI meeting-notes needs
-'trigger'. Dates are ISO YYYY-MM-DD."""
+finances, events (incl. speakers, sponsor & partner line-ups), community
+projects, task boards, meetings, documents, sponsors (pipeline, packages, leads,
+contacts) and partner orgs. Call `whoami` first to see what your API key is
+allowed to do. Reads need the 'read' scope; creating/updating needs 'write'; AI
+meeting-notes needs 'trigger'. Image/file uploads happen in the dashboard, not
+here — the media/attachment tools are read-only listings. Dates are ISO
+YYYY-MM-DD; events and projects are drafts until you set is_public=true."""
 
 mcp = FastMCP("DSEC", stateless_http=True, streamable_http_path="/", instructions=_INSTRUCTIONS)
 
@@ -176,19 +211,33 @@ def list_events(status: str | None = None, type: str | None = None, limit: int =
 @mcp.tool()
 def create_event(name: str, type: str | None = None, status: str | None = None,
                  start_date: str | None = None, end_date: str | None = None,
+                 trimester: str | None = None, format: str | None = None,
                  venue: str | None = None, committee: str | None = None,
                  event_lead_id: int | None = None, ticket_url: str | None = None,
                  ticket_tiers: list[dict] | None = None, food_provided: bool | None = None,
-                 description: str | None = None) -> dict:
+                 external_guests: bool | None = None, expected_attendance: int | None = None,
+                 actual_attendance: int | None = None, description: str | None = None,
+                 dusa_required: bool | None = None, dusa_deadline: str | None = None,
+                 dusa_submission_status: str | None = None, support_types: list[str] | None = None,
+                 partner_org: str | None = None, related_sponsor_id: int | None = None,
+                 is_public: bool | None = None) -> dict:
     """Create an event. Dates are ISO YYYY-MM-DD. `ticket_tiers` is tiered pricing:
     a list of {"label": str, "price": number | null} (price 0 = free, null = unset).
-    `description` is free-form Markdown shown on the public website."""
+    `description` is free-form Markdown shown on the public website. New events are
+    drafts — set is_public=true to publish to the public website. `support_types`
+    + `partner_org` capture an in-kind/partner-run collaboration (no money)."""
     require_scope("write")
     data = _coerce(EventCreate, _data(name=name, type=type, status=status, start_date=start_date,
-                                      end_date=end_date, venue=venue, committee=committee,
-                                      event_lead_id=event_lead_id, ticket_url=ticket_url,
-                                      ticket_tiers=ticket_tiers, food_provided=food_provided,
-                                      description=description))
+                                      end_date=end_date, trimester=trimester, format=format,
+                                      venue=venue, committee=committee, event_lead_id=event_lead_id,
+                                      ticket_url=ticket_url, ticket_tiers=ticket_tiers,
+                                      food_provided=food_provided, external_guests=external_guests,
+                                      expected_attendance=expected_attendance,
+                                      actual_attendance=actual_attendance, description=description,
+                                      dusa_required=dusa_required, dusa_deadline=dusa_deadline,
+                                      dusa_submission_status=dusa_submission_status,
+                                      support_types=support_types, partner_org=partner_org,
+                                      related_sponsor_id=related_sponsor_id, is_public=is_public))
     with SessionLocal() as db:
         return _dump(EventOut, events_service.create_event(db, data))
 
@@ -196,19 +245,32 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
 @mcp.tool()
 def update_event(event_id: int, name: str | None = None, type: str | None = None,
                  status: str | None = None, start_date: str | None = None, end_date: str | None = None,
+                 trimester: str | None = None, format: str | None = None,
                  venue: str | None = None, committee: str | None = None,
                  event_lead_id: int | None = None, ticket_url: str | None = None,
                  ticket_tiers: list[dict] | None = None, food_provided: bool | None = None,
-                 description: str | None = None) -> dict:
+                 external_guests: bool | None = None, expected_attendance: int | None = None,
+                 actual_attendance: int | None = None, description: str | None = None,
+                 dusa_required: bool | None = None, dusa_deadline: str | None = None,
+                 dusa_submission_status: str | None = None, support_types: list[str] | None = None,
+                 partner_org: str | None = None, related_sponsor_id: int | None = None,
+                 is_public: bool | None = None) -> dict:
     """Update an event (only the fields you pass change). `ticket_tiers` is tiered
     pricing: a list of {"label": str, "price": number | null} (price 0 = free).
-    `description` is free-form Markdown shown on the public website."""
+    `description` is free-form Markdown shown on the public website. Set
+    is_public=true to publish (or false to unpublish/return to draft)."""
     require_scope("write")
     data = _coerce(EventUpdate, _data(name=name, type=type, status=status, start_date=start_date,
-                                      end_date=end_date, venue=venue, committee=committee,
-                                      event_lead_id=event_lead_id, ticket_url=ticket_url,
-                                      ticket_tiers=ticket_tiers, food_provided=food_provided,
-                                      description=description))
+                                      end_date=end_date, trimester=trimester, format=format,
+                                      venue=venue, committee=committee, event_lead_id=event_lead_id,
+                                      ticket_url=ticket_url, ticket_tiers=ticket_tiers,
+                                      food_provided=food_provided, external_guests=external_guests,
+                                      expected_attendance=expected_attendance,
+                                      actual_attendance=actual_attendance, description=description,
+                                      dusa_required=dusa_required, dusa_deadline=dusa_deadline,
+                                      dusa_submission_status=dusa_submission_status,
+                                      support_types=support_types, partner_org=partner_org,
+                                      related_sponsor_id=related_sponsor_id, is_public=is_public))
     with SessionLocal() as db:
         return _dump(EventOut, _require(events_service.update_event(db, event_id, data), "event not found"))
 
@@ -244,6 +306,159 @@ def get_event_review_responses(event_id: int) -> dict:
         return ReviewResponsesOut(**_require(data, "event not found")).model_dump(mode="json")
 
 
+@mcp.tool()
+def archive_event(event_id: int) -> dict:
+    """Soft-delete (archive) an event. It disappears from the dashboard and the
+    public site but is never hard-deleted (keeps the audit trail)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(EventOut, _require(events_service.archive_event(db, event_id), "event not found"))
+
+
+# --------------------------------------------------------------------------- #
+# event line-up: speakers, sponsor links, partner links
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def list_event_speakers(event_id: int) -> list[dict]:
+    """List an event's speakers (name/title/bio, in display order)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(EventSpeakerOut, events_relations.list_speakers(db, event_id))
+
+
+@mcp.tool()
+def add_event_speaker(event_id: int, name: str | None = None, person_id: int | None = None,
+                      title: str | None = None, bio: str | None = None,
+                      sort_order: int | None = None) -> dict:
+    """Add a speaker to an event. Give a `person_id` to link a roster person
+    (reuses their headshot) OR a free-text `name` for an external guest."""
+    require_scope("write")
+    data = _coerce(EventSpeakerCreate, _data(name=name, person_id=person_id, title=title,
+                                             bio=bio, sort_order=sort_order))
+    with SessionLocal() as db:
+        _require(events_service.get_event(db, event_id), "event not found")
+        try:
+            return _dump(EventSpeakerOut, events_relations.add_speaker(db, event_id, data))
+        except ValueError as exc:
+            raise ValueError(str(exc))
+
+
+@mcp.tool()
+def update_event_speaker(speaker_id: int, name: str | None = None, person_id: int | None = None,
+                         title: str | None = None, bio: str | None = None,
+                         sort_order: int | None = None) -> dict:
+    """Update a speaker's details (only the fields you pass change)."""
+    require_scope("write")
+    data = _coerce(EventSpeakerUpdate, _data(name=name, person_id=person_id, title=title,
+                                             bio=bio, sort_order=sort_order))
+    with SessionLocal() as db:
+        return _dump(EventSpeakerOut, _require(events_relations.update_speaker(db, speaker_id, data),
+                                               "speaker not found"))
+
+
+@mcp.tool()
+def remove_event_speaker(speaker_id: int) -> dict:
+    """Remove a speaker from an event (soft-archive)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        _require(events_relations.remove_speaker(db, speaker_id), "speaker not found")
+        return {"removed": True, "speaker_id": speaker_id}
+
+
+@mcp.tool()
+def list_event_sponsors(event_id: int) -> list[dict]:
+    """List the sponsors linked to an event (its sponsor wall)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(EventSponsorOut, events_relations.list_event_sponsors(db, event_id))
+
+
+@mcp.tool()
+def link_event_sponsor(event_id: int, sponsor_id: int, tier: str | None = None,
+                       sort_order: int | None = None) -> dict:
+    """Link a sponsor to an event so its logo shows on the event's sponsor wall.
+    Idempotent — re-linking just updates the tier/order. `tier` is an optional
+    per-event override."""
+    require_scope("write")
+    with SessionLocal() as db:
+        _require(events_service.get_event(db, event_id), "event not found")
+        row = events_relations.link_sponsor(db, event_id, sponsor_id, tier=tier, sort_order=sort_order)
+        return _dump(EventSponsorOut, _require(row, "sponsor not found"))
+
+
+@mcp.tool()
+def unlink_event_sponsor(event_id: int, sponsor_id: int) -> dict:
+    """Remove a sponsor from an event's sponsor wall."""
+    require_scope("write")
+    with SessionLocal() as db:
+        if not events_relations.unlink_sponsor(db, event_id, sponsor_id):
+            raise ValueError("sponsor link not found")
+        return {"unlinked": True, "event_id": event_id, "sponsor_id": sponsor_id}
+
+
+@mcp.tool()
+def list_event_partners(event_id: int) -> list[dict]:
+    """List the partner orgs/clubs co-hosting an event."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(EventPartnerOut, events_relations.list_event_partners(db, event_id))
+
+
+@mcp.tool()
+def link_event_partner(event_id: int, partner_id: int, role: str | None = None,
+                       sort_order: int | None = None) -> dict:
+    """Link a partner (collaborator club/org) to an event. Idempotent. `role` is
+    an optional per-event label (e.g. 'Co-host')."""
+    require_scope("write")
+    with SessionLocal() as db:
+        _require(events_service.get_event(db, event_id), "event not found")
+        row = events_relations.link_partner(db, event_id, partner_id, role=role, sort_order=sort_order)
+        return _dump(EventPartnerOut, _require(row, "partner not found"))
+
+
+@mcp.tool()
+def unlink_event_partner(event_id: int, partner_id: int) -> dict:
+    """Remove a partner from an event."""
+    require_scope("write")
+    with SessionLocal() as db:
+        if not events_relations.unlink_partner(db, event_id, partner_id):
+            raise ValueError("partner link not found")
+        return {"unlinked": True, "event_id": event_id, "partner_id": partner_id}
+
+
+# --------------------------------------------------------------------------- #
+# partners (collaborator clubs / orgs)
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def list_partners(search: str | None = None, limit: int = 50) -> list[dict]:
+    """List partner organisations / collaborator clubs."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(PartnerOut, partners_service.list_partners(db, search=search, limit=limit))
+
+
+@mcp.tool()
+def create_partner(name: str, website: str | None = None, notes: str | None = None) -> dict:
+    """Add a partner org/club. Link it to events with `link_event_partner`."""
+    require_scope("write")
+    data = _coerce(PartnerCreate, _data(name=name, website=website, notes=notes))
+    with SessionLocal() as db:
+        return _dump(PartnerOut, partners_service.create_partner(db, data))
+
+
+@mcp.tool()
+def update_partner(partner_id: int, name: str | None = None, website: str | None = None,
+                   notes: str | None = None) -> dict:
+    """Update a partner org (only the fields you pass change)."""
+    require_scope("write")
+    data = _coerce(PartnerUpdate, _data(name=name, website=website, notes=notes))
+    with SessionLocal() as db:
+        return _dump(PartnerOut, _require(partners_service.update_partner(db, partner_id, data),
+                                          "partner not found"))
+
+
 # --------------------------------------------------------------------------- #
 # projects
 # --------------------------------------------------------------------------- #
@@ -262,12 +477,18 @@ def create_project(name: str, summary: str | None = None, description: str | Non
                    status: str | None = None, category: str | None = None,
                    tech_tags: list[str] | None = None, lead_id: int | None = None,
                    repo_url: str | None = None, demo_url: str | None = None,
+                   start_date: str | None = None, end_date: str | None = None,
+                   related_event_id: int | None = None, notes: str | None = None,
                    is_public: bool | None = None, featured: bool | None = None) -> dict:
-    """Create a community project. Set is_public=true to show it on the website."""
+    """Create a community project. Set is_public=true to show it on the website
+    (it's a draft until then); featured=true pins it. `tech_tags` is a list of
+    strings; `notes` is internal-only (never shown publicly)."""
     require_scope("write")
     data = _coerce(ProjectCreate, _data(name=name, summary=summary, description=description,
                                         status=status, category=category, tech_tags=tech_tags,
                                         lead_id=lead_id, repo_url=repo_url, demo_url=demo_url,
+                                        start_date=start_date, end_date=end_date,
+                                        related_event_id=related_event_id, notes=notes,
                                         is_public=is_public, featured=featured))
     with SessionLocal() as db:
         return _dump(ProjectOut, projects_service.create_project(db, data))
@@ -276,12 +497,20 @@ def create_project(name: str, summary: str | None = None, description: str | Non
 @mcp.tool()
 def update_project(project_id: int, name: str | None = None, summary: str | None = None,
                    description: str | None = None, status: str | None = None,
-                   is_public: bool | None = None, featured: bool | None = None,
-                   repo_url: str | None = None, demo_url: str | None = None) -> dict:
-    """Update a community project (only the fields you pass change)."""
+                   category: str | None = None, tech_tags: list[str] | None = None,
+                   lead_id: int | None = None, related_event_id: int | None = None,
+                   start_date: str | None = None, end_date: str | None = None,
+                   notes: str | None = None, is_public: bool | None = None,
+                   featured: bool | None = None, repo_url: str | None = None,
+                   demo_url: str | None = None) -> dict:
+    """Update a community project (only the fields you pass change). Set
+    is_public=true/false to publish/unpublish."""
     require_scope("write")
     data = _coerce(ProjectUpdate, _data(name=name, summary=summary, description=description,
-                                        status=status, is_public=is_public, featured=featured,
+                                        status=status, category=category, tech_tags=tech_tags,
+                                        lead_id=lead_id, related_event_id=related_event_id,
+                                        start_date=start_date, end_date=end_date, notes=notes,
+                                        is_public=is_public, featured=featured,
                                         repo_url=repo_url, demo_url=demo_url))
     with SessionLocal() as db:
         return _dump(ProjectOut, _require(projects_service.update_project(db, project_id, data),
@@ -340,11 +569,20 @@ def create_task(title: str, board_id: int | None = None, status: str | None = No
 @mcp.tool()
 def update_task(task_id: int, title: str | None = None, description: str | None = None,
                 priority: str | None = None, assignee_id: int | None = None,
-                due_date: str | None = None, committee: str | None = None) -> dict:
-    """Update a task card's fields (use move_task to change column/order)."""
+                start_date: str | None = None, due_date: str | None = None,
+                committee: str | None = None, board_id: int | None = None,
+                related_event_id: int | None = None, related_project_id: int | None = None,
+                related_sponsor_id: int | None = None) -> dict:
+    """Update a task card's fields, including its cross-entity links
+    (related_event_id / related_project_id / related_sponsor_id) and which board
+    it lives on. Use move_task to change column (status)/order."""
     require_scope("write")
     data = _coerce(TaskUpdate, _data(title=title, description=description, priority=priority,
-                                     assignee_id=assignee_id, due_date=due_date, committee=committee))
+                                     assignee_id=assignee_id, start_date=start_date, due_date=due_date,
+                                     committee=committee, board_id=board_id,
+                                     related_event_id=related_event_id,
+                                     related_project_id=related_project_id,
+                                     related_sponsor_id=related_sponsor_id))
     with SessionLocal() as db:
         return _dump(TaskOut, _require(tasks_service.update_task(db, task_id, data), "task not found"))
 
@@ -469,32 +707,170 @@ def list_sponsors(stage: str | None = None, tier: str | None = None, limit: int 
 
 @mcp.tool()
 def create_sponsor(organisation: str, stage: str | None = None, tier: str | None = None,
-                   value_aud: float | None = None, contact_email: str | None = None,
-                   website: str | None = None, next_action: str | None = None,
-                   next_action_date: str | None = None, notes: str | None = None) -> dict:
-    """Add a sponsorship lead."""
+                   relationship_type: str | None = None, value_aud: float | None = None,
+                   support_types: list[str] | None = None, contact_person_id: int | None = None,
+                   contact_email: str | None = None, website: str | None = None,
+                   next_action: str | None = None, next_action_date: str | None = None,
+                   show_on_website: bool | None = None, notes: str | None = None) -> dict:
+    """Add a sponsorship lead. `relationship_type` is 'Sponsor' (gives money) or
+    'Partner' (in-kind only); `support_types` is what they provide (e.g.
+    ["Cash","Venue"]). Set show_on_website=true to put a confirmed sponsor (with
+    its uploaded logo) on the public sponsor wall."""
     require_scope("write")
     data = _coerce(SponsorCreate, _data(organisation=organisation, stage=stage, tier=tier,
-                                        value_aud=value_aud, contact_email=contact_email, website=website,
-                                        next_action=next_action, next_action_date=next_action_date, notes=notes))
+                                        relationship_type=relationship_type, value_aud=value_aud,
+                                        support_types=support_types, contact_person_id=contact_person_id,
+                                        contact_email=contact_email, website=website,
+                                        next_action=next_action, next_action_date=next_action_date,
+                                        show_on_website=show_on_website, notes=notes))
     with SessionLocal() as db:
         return _dump(SponsorOut, sponsors_service.create_sponsor(db, data))
 
 
 @mcp.tool()
-def update_sponsor(sponsor_id: int, stage: str | None = None, tier: str | None = None,
-                   value_aud: float | None = None, dusa_approved: bool | None = None,
-                   next_action: str | None = None, next_action_date: str | None = None,
-                   last_contact_date: str | None = None, notes: str | None = None) -> dict:
-    """Advance a sponsor through the pipeline (stage, next action, approval, etc.)."""
+def update_sponsor(sponsor_id: int, organisation: str | None = None, stage: str | None = None,
+                   tier: str | None = None, relationship_type: str | None = None,
+                   value_aud: float | None = None, support_types: list[str] | None = None,
+                   contact_person_id: int | None = None, contact_email: str | None = None,
+                   website: str | None = None, dusa_approved: bool | None = None,
+                   show_on_website: bool | None = None, next_action: str | None = None,
+                   next_action_date: str | None = None, last_contact_date: str | None = None,
+                   notes: str | None = None) -> dict:
+    """Advance a sponsor through the pipeline (stage, next action, approval, etc.)
+    or publish it (show_on_website). Only the fields you pass change."""
     require_scope("write")
-    data = _coerce(SponsorUpdate, _data(stage=stage, tier=tier, value_aud=value_aud,
-                                        dusa_approved=dusa_approved, next_action=next_action,
-                                        next_action_date=next_action_date, last_contact_date=last_contact_date,
-                                        notes=notes))
+    data = _coerce(SponsorUpdate, _data(organisation=organisation, stage=stage, tier=tier,
+                                        relationship_type=relationship_type, value_aud=value_aud,
+                                        support_types=support_types, contact_person_id=contact_person_id,
+                                        contact_email=contact_email, website=website,
+                                        dusa_approved=dusa_approved, show_on_website=show_on_website,
+                                        next_action=next_action, next_action_date=next_action_date,
+                                        last_contact_date=last_contact_date, notes=notes))
     with SessionLocal() as db:
         return _dump(SponsorOut, _require(sponsors_service.update_sponsor(db, sponsor_id, data),
                                           "sponsor not found"))
+
+
+@mcp.tool()
+def list_sponsor_contacts(sponsor_id: int) -> list[dict]:
+    """List the individual people attached to a sponsorship (organiser, signatory, …)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(SponsorContactOut, sponsor_contacts.list_contacts(db, sponsor_id))
+
+
+@mcp.tool()
+def add_sponsor_contact(sponsor_id: int, name: str | None = None, person_id: int | None = None,
+                        role: str | None = None, email: str | None = None,
+                        phone: str | None = None, notes: str | None = None,
+                        sort_order: int | None = None) -> dict:
+    """Attach a contact to a sponsor. Give a `person_id` to link a roster person
+    OR a free-text `name`. `role` is Organiser/Contact/Signatory/Other."""
+    require_scope("write")
+    data = _coerce(SponsorContactCreate, _data(name=name, person_id=person_id, role=role,
+                                               email=email, phone=phone, notes=notes,
+                                               sort_order=sort_order))
+    with SessionLocal() as db:
+        _require(sponsors_service.get_sponsor(db, sponsor_id), "sponsor not found")
+        try:
+            return _dump(SponsorContactOut, sponsor_contacts.add_contact(db, sponsor_id, data))
+        except ValueError as exc:
+            raise ValueError(str(exc))
+
+
+@mcp.tool()
+def update_sponsor_contact(contact_id: int, name: str | None = None, person_id: int | None = None,
+                           role: str | None = None, email: str | None = None,
+                           phone: str | None = None, notes: str | None = None,
+                           sort_order: int | None = None) -> dict:
+    """Update a sponsor contact (only the fields you pass change)."""
+    require_scope("write")
+    data = _coerce(SponsorContactUpdate, _data(name=name, person_id=person_id, role=role,
+                                               email=email, phone=phone, notes=notes,
+                                               sort_order=sort_order))
+    with SessionLocal() as db:
+        return _dump(SponsorContactOut, _require(sponsor_contacts.update_contact(db, contact_id, data),
+                                                 "contact not found"))
+
+
+@mcp.tool()
+def remove_sponsor_contact(contact_id: int) -> dict:
+    """Remove a contact from a sponsor (soft-archive)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        _require(sponsor_contacts.remove_contact(db, contact_id), "contact not found")
+        return {"removed": True, "contact_id": contact_id}
+
+
+# --------------------------------------------------------------------------- #
+# sponsor packages (public-facing tier definitions) + inbound leads
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def list_sponsor_packages() -> list[dict]:
+    """List the sponsorship packages/tiers shown on the public website."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(SponsorPackageOut, packages_service.list_packages(db))
+
+
+@mcp.tool()
+def create_sponsor_package(name: str, pitch: str | None = None, price: str | None = None,
+                           includes: list[str] | None = None, featured: bool | None = None,
+                           is_visible: bool | None = None, display_order: int | None = None) -> dict:
+    """Add a sponsorship package. `price` is free text (e.g. 'from $500'); `includes`
+    is a list of perk strings. Hidden (is_visible=false) packages stay off the site."""
+    require_scope("write")
+    data = _coerce(SponsorPackageCreate, _data(name=name, pitch=pitch, price=price, includes=includes,
+                                               featured=featured, is_visible=is_visible,
+                                               display_order=display_order))
+    with SessionLocal() as db:
+        return _dump(SponsorPackageOut, packages_service.create_package(db, data))
+
+
+@mcp.tool()
+def update_sponsor_package(package_id: int, name: str | None = None, pitch: str | None = None,
+                           price: str | None = None, includes: list[str] | None = None,
+                           featured: bool | None = None, is_visible: bool | None = None,
+                           display_order: int | None = None) -> dict:
+    """Update a sponsorship package (only the fields you pass change)."""
+    require_scope("write")
+    data = _coerce(SponsorPackageUpdate, _data(name=name, pitch=pitch, price=price, includes=includes,
+                                               featured=featured, is_visible=is_visible,
+                                               display_order=display_order))
+    with SessionLocal() as db:
+        return _dump(SponsorPackageOut, _require(packages_service.update_package(db, package_id, data),
+                                                 "package not found"))
+
+
+@mcp.tool()
+def delete_sponsor_package(package_id: int) -> dict:
+    """Permanently delete a sponsorship package."""
+    require_scope("write")
+    with SessionLocal() as db:
+        if not packages_service.delete_package(db, package_id):
+            raise ValueError("package not found")
+        return {"deleted": True, "package_id": package_id}
+
+
+@mcp.tool()
+def list_sponsor_leads(status: str | None = None, limit: int = 50) -> list[dict]:
+    """List inbound sponsorship leads from the website (pricing-unlock, enquiry
+    forms, Cal.com bookings). status is new | contacted | converted | closed."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(SponsorLeadOut, leads_service.list_leads(db, status=status, limit=limit))
+
+
+@mcp.tool()
+def update_sponsor_lead(lead_id: int, status: str | None = None, notes: str | None = None) -> dict:
+    """Move an inbound lead through its pipeline (status) and add internal notes.
+    status is new | contacted | converted | closed."""
+    require_scope("write")
+    data = _coerce(SponsorLeadUpdate, _data(status=status, notes=notes))
+    with SessionLocal() as db:
+        return _dump(SponsorLeadOut, _require(leads_service.update_lead(db, lead_id, data),
+                                              "lead not found"))
 
 
 # --------------------------------------------------------------------------- #
@@ -514,13 +890,62 @@ def list_people(type: str | None = None, committee: str | None = None,
 @mcp.tool()
 def create_person(name: str, type: str | None = None, committee: str | None = None,
                   role_title: str | None = None, email: str | None = None,
-                  status: str | None = None) -> dict:
-    """Add a person (committee member or external contact)."""
+                  status: str | None = None, notes: str | None = None, bio: str | None = None,
+                  show_on_website: bool | None = None, display_order: int | None = None) -> dict:
+    """Add a person (committee member or external contact). `bio` is a public
+    one-liner; `notes` is internal-only. Set show_on_website=true to publish them
+    on the website team grid (their headshot is uploaded in the dashboard)."""
     require_scope("write")
     data = _coerce(PersonCreate, _data(name=name, type=type, committee=committee,
-                                       role_title=role_title, email=email, status=status))
+                                       role_title=role_title, email=email, status=status,
+                                       notes=notes, bio=bio, show_on_website=show_on_website,
+                                       display_order=display_order))
     with SessionLocal() as db:
         return _dump(PersonOut, people_service.create_person(db, data))
+
+
+@mcp.tool()
+def update_person(person_id: int, name: str | None = None, type: str | None = None,
+                  committee: str | None = None, role_title: str | None = None,
+                  email: str | None = None, status: str | None = None, notes: str | None = None,
+                  bio: str | None = None, show_on_website: bool | None = None,
+                  display_order: int | None = None) -> dict:
+    """Update a person (only the fields you pass change). Set show_on_website
+    true/false to add/remove them from the public website team grid; `display_order`
+    sorts that grid (lower first)."""
+    require_scope("write")
+    data = _coerce(PersonUpdate, _data(name=name, type=type, committee=committee,
+                                       role_title=role_title, email=email, status=status,
+                                       notes=notes, bio=bio, show_on_website=show_on_website,
+                                       display_order=display_order))
+    with SessionLocal() as db:
+        return _dump(PersonOut, _require(people_service.update_person(db, person_id, data),
+                                         "person not found"))
+
+
+# --------------------------------------------------------------------------- #
+# media + attachments (read-only — uploads happen in the dashboard)
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def list_media(entity_type: str, entity_id: int) -> list[dict]:
+    """List the images attached to an entity (their public URLs + alt text).
+    entity_type is event | project | sponsor | speaker | person | partner. Uploads
+    are done in the dashboard (they need the cropped binary); this is read-only."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(MediaOut, media_service.list_media(
+            db, entity_type=entity_type, entity_id=entity_id))
+
+
+@mcp.tool()
+def list_attachments(entity_type: str, entity_id: int) -> list[dict]:
+    """List the files (PDFs/images) attached to an entity (sponsor today), with
+    their public URLs. Read-only — uploads happen in the dashboard."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(AttachmentOut, attachments_service.list_attachments(
+            db, entity_type=entity_type, entity_id=entity_id))
 
 
 # The mounted Starlette app (its lifespan runs the session manager — see main.py).

@@ -21,14 +21,17 @@ club — members, finances, events, projects, tasks, meetings, documents and
 sponsors — straight from **Claude** or **ChatGPT**, no dashboard needed.
 
 ## 1. Get an API key
-Ask a DSEC admin for a key (it looks like `dsec_live_…`). Your key has **scopes**
-that decide what you can do:
+Mint your own from the dashboard at **Settings → API & MCP** (the scopes you can
+grant are bounded by your role), or ask a DSEC admin. A key looks like
+`dsec_live_…`. Your key has **scopes** that decide what you can do:
 
-- `read`  — view everything (members, finances, tasks, docs, …)
-- `write` — create and update events, projects, tasks, docs, sponsors, people
+- `read`  — view everything (members, finances, events, tasks, docs, sponsors, …)
+- `write` — create/update events (+speakers, sponsor & partner line-ups),
+  projects, tasks, docs, sponsors (pipeline, packages, leads, contacts),
+  partners, and people
 - `trigger` — use AI features (generate meeting notes from a transcript)
 
-Ask only for the scopes you need. In chat, run the **`whoami`** tool to see what
+Grant only the scopes you need. In chat, run the **`whoami`** tool to see what
 your key allows.
 
 ## 2. Add the server
@@ -74,13 +77,22 @@ Ask your assistant things like:
 TOOLS = {
     "read": [
         "whoami", "list_members", "member_stats", "finance_summary", "list_transactions",
-        "list_events", "list_projects", "list_boards", "list_tasks", "list_meetings",
-        "list_documents", "get_document", "list_sponsors", "list_people",
+        "list_events", "list_event_speakers", "list_event_sponsors", "list_event_partners",
+        "get_event_review_responses", "list_projects", "list_partners", "list_boards",
+        "list_tasks", "list_meetings", "list_documents", "get_document", "list_sponsors",
+        "list_sponsor_contacts", "list_sponsor_packages", "list_sponsor_leads", "list_people",
+        "list_media", "list_attachments",
     ],
     "write": [
-        "set_event_budget", "create_event", "update_event", "create_project", "update_project",
-        "create_board", "create_task", "update_task", "move_task", "create_meeting",
-        "create_document", "update_document", "create_sponsor", "update_sponsor", "create_person",
+        "set_event_budget", "create_event", "update_event", "archive_event",
+        "create_event_review_form", "add_event_speaker", "update_event_speaker",
+        "remove_event_speaker", "link_event_sponsor", "unlink_event_sponsor",
+        "link_event_partner", "unlink_event_partner", "create_partner", "update_partner",
+        "create_project", "update_project", "create_board", "create_task", "update_task",
+        "move_task", "create_meeting", "create_document", "update_document",
+        "create_sponsor", "update_sponsor", "add_sponsor_contact", "update_sponsor_contact",
+        "remove_sponsor_contact", "create_sponsor_package", "update_sponsor_package",
+        "delete_sponsor_package", "update_sponsor_lead", "create_person", "update_person",
     ],
     "trigger": ["generate_meeting_notes"],
 }
@@ -101,7 +113,8 @@ def info() -> dict:
         "auth": "Authorization: Bearer dsec_live_...",
         "scopes": {
             "read": "view all data",
-            "write": "create/update events, projects, tasks, docs, sponsors, people",
+            "write": "create/update events (+speakers/sponsors/partners), projects, "
+                     "tasks, docs, sponsors (+packages/leads/contacts), partners, people",
             "trigger": "AI features (meeting notes)",
         },
         "tools": TOOLS,

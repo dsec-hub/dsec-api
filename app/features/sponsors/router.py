@@ -11,8 +11,15 @@ from app.core.net import client_ip
 from app.db import get_db
 from app.models import APIKey
 
-from . import service
-from .schemas import SponsorCreate, SponsorOut, SponsorUpdate
+from . import contacts, service
+from .schemas import (
+    SponsorContactCreate,
+    SponsorContactOut,
+    SponsorContactUpdate,
+    SponsorCreate,
+    SponsorOut,
+    SponsorUpdate,
+)
 
 router = APIRouter()
 
@@ -90,3 +97,71 @@ def archive_sponsor(
     if sponsor is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "sponsor not found")
     return SponsorOut.model_validate(sponsor)
+
+
+# --------------------------------------------------------------------------- #
+# Sponsor contacts (people attached to a sponsorship)
+# --------------------------------------------------------------------------- #
+
+def _require_sponsor(db: Session, sponsor_id: int) -> None:
+    if not contacts.sponsor_exists(db, sponsor_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "sponsor not found")
+
+
+@router.get("/{sponsor_id}/contacts", response_model=list[SponsorContactOut])
+def list_contacts(
+    sponsor_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> list[SponsorContactOut]:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_sponsor(db, sponsor_id)
+    return [SponsorContactOut.model_validate(r) for r in contacts.list_contacts(db, sponsor_id)]
+
+
+@router.post("/{sponsor_id}/contacts", response_model=SponsorContactOut,
+             status_code=status.HTTP_201_CREATED)
+def add_contact(
+    sponsor_id: int,
+    body: SponsorContactCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> SponsorContactOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    _require_sponsor(db, sponsor_id)
+    try:
+        contact = contacts.add_contact(db, sponsor_id, body.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
+    return SponsorContactOut.model_validate(contact)
+
+
+@router.patch("/{sponsor_id}/contacts/{contact_id}", response_model=SponsorContactOut)
+def update_contact(
+    sponsor_id: int,
+    contact_id: int,
+    body: SponsorContactUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> SponsorContactOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    contact = contacts.update_contact(db, contact_id, body.model_dump(exclude_unset=True))
+    if contact is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "contact not found")
+    return SponsorContactOut.model_validate(contact)
+
+
+@router.delete("/{sponsor_id}/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_contact(
+    sponsor_id: int,
+    contact_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> None:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    if contacts.remove_contact(db, contact_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "contact not found")

@@ -46,17 +46,19 @@ def _h(key):
 
 # --- Pillow processing ------------------------------------------------------
 
-def test_process_image_emits_webp_and_png_capped():
+def test_process_image_emits_webp_and_download_capped():
     result = processing.process_image(_png_bytes((3000, 1500)))
     # Longest side downscaled to the 2000px cap, aspect preserved.
     assert (result.width, result.height) == (2000, 1000)
-    # PNG magic.
-    assert result.png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+    # Opaque source → JPEG download.
+    assert result.download_ext == "jpg"
+    assert result.download_content_type == "image/jpeg"
+    assert result.download_bytes[:3] == b"\xff\xd8\xff"  # JPEG magic
     # WebP magic (RIFF....WEBP).
     assert result.webp_bytes[:4] == b"RIFF" and result.webp_bytes[8:12] == b"WEBP"
     # Both decode back to the expected size.
     assert Image.open(io.BytesIO(result.webp_bytes)).size == (2000, 1000)
-    assert Image.open(io.BytesIO(result.png_bytes)).size == (2000, 1000)
+    assert Image.open(io.BytesIO(result.download_bytes)).size == (2000, 1000)
 
 
 def test_process_image_does_not_upscale_small():
@@ -67,6 +69,57 @@ def test_process_image_does_not_upscale_small():
 def test_process_image_rejects_non_image():
     with pytest.raises(ValueError):
         processing.process_image(b"this is not an image")
+
+
+def _detailed_png_bytes(size=(2400, 2400)) -> bytes:
+    """A high-detail image whose lossless PNG is multi-MB — the worst case the
+    size-budget ladder has to tame (stands in for a real photo)."""
+    img = Image.effect_mandelbrot(size, (-2.0, -1.5, 1.0, 1.5), 120).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_budgets_enforced_for_detailed_image():
+    """A detailed photo-like image is squeezed under both byte budgets."""
+    from app.config import settings
+
+    raw = _detailed_png_bytes()
+    assert len(raw) > settings.MEDIA_DOWNLOAD_MAX_BYTES  # source genuinely oversized
+
+    result = processing.process_image(raw)
+    assert len(result.webp_bytes) <= settings.MEDIA_WEBP_MAX_BYTES
+    assert len(result.download_bytes) <= settings.MEDIA_DOWNLOAD_MAX_BYTES
+    assert result.download_ext == "jpg"  # opaque photo → JPEG download
+    # The WebP decodes at the reported (display) dimensions.
+    assert Image.open(io.BytesIO(result.webp_bytes)).size == (result.width, result.height)
+
+
+def test_budget_step_down_shrinks_dimensions(monkeypatch):
+    """When even the smallest quality won't fit, the ladder drops resolution."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "MEDIA_WEBP_MAX_BYTES", 8_000)
+    monkeypatch.setattr(settings, "MEDIA_DOWNLOAD_MAX_BYTES", 8_000)
+
+    result = processing.process_image(_detailed_png_bytes((2000, 2000)))
+    assert len(result.webp_bytes) <= settings.MEDIA_WEBP_MAX_BYTES
+    # An 8 KB ceiling is unreachable at 2000px — it must have downscaled.
+    assert max(result.width, result.height) < 2000
+
+
+def test_logo_download_is_png_opaque_download_is_jpeg():
+    """Transparent logos download as PNG (alpha); opaque images as JPEG."""
+    logo = processing.process_image(_rgba_png_bytes(), keep_transparency=True)
+    assert logo.download_ext == "png"
+    assert logo.download_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+    # The semi-transparent source (alpha 128) must stay non-opaque.
+    alpha = Image.open(io.BytesIO(logo.download_bytes)).convert("RGBA").getchannel("A")
+    assert min(alpha.getdata()) < 255
+
+    opaque = processing.process_image(_png_bytes((300, 300)))
+    assert opaque.download_ext == "jpg"
+    assert opaque.download_bytes[:3] == b"\xff\xd8\xff"
 
 
 # --- /media route guards ----------------------------------------------------

@@ -86,6 +86,17 @@ class PublicEventSponsor(BaseModel):
     logo_png: str | None
 
 
+class PublicEventPartner(BaseModel):
+    """A partner (collaborator club) shown as a logo on the event page. Only
+    partners opted in via show_on_website appear here."""
+
+    name: str
+    website: str | None
+    role: str | None        # optional per-event label, e.g. "Co-host"
+    logo: str | None        # transparent logo (webp); null = no logo uploaded
+    logo_png: str | None
+
+
 class PublicSponsor(BaseModel):
     """A published sponsor for the public /website/sponsors logo wall."""
 
@@ -115,6 +126,7 @@ class PublicEvent(BaseModel):
     lead: PublicLead | None = None  # event lead (name + role + headshot)
     speakers: list[PublicSpeaker] = []
     sponsors: list[PublicEventSponsor] = []
+    partners: list[PublicEventPartner] = []
 
 
 class SiteStats(BaseModel):

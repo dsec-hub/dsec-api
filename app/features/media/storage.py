@@ -77,6 +77,20 @@ def upload_object(path: str, data: bytes, content_type: str) -> str:
         ) from exc
 
 
+def download_object(path: str) -> bytes:
+    """Fetch the raw bytes of an object. Raises ``StorageUnavailable`` on a
+    backend error (missing object, auth, network) — used by the recompress
+    backfill, which reads the stored PNG back as its source."""
+    try:
+        return _bucket().download(path)
+    except StorageError:
+        raise
+    except Exception as exc:  # storage3 StorageApiError, httpx errors, …
+        raise StorageUnavailable(
+            f"image download failed (path {path!r}): {exc}"
+        ) from exc
+
+
 def delete_objects(paths: list[str]) -> None:
     """Remove objects from the bucket. Best-effort: a missing object or a
     transient backend error is logged, never raised — cleanup must not block

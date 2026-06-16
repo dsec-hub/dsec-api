@@ -32,6 +32,8 @@ class EventBase(BaseModel):
     description: str | None = None
     budget_aud: float | None = None
     grant_aud: float | None = None
+    # Draft (False) vs published (True). Published events show on the public site.
+    is_public: bool | None = None
 
 
 class EventCreate(EventBase):
@@ -68,10 +70,98 @@ class EventOut(BaseModel):
     description: str | None
     budget_aud: float | None
     grant_aud: float | None
+    support_types: list | None
+    partner_org: str | None
+    related_sponsor_id: int | None
+    is_public: bool
     # Post-event review form (Tally) — set by the reviews feature, read-only here.
     review_form_id: str | None
     review_form_url: str | None
     review_form_created_at: datetime | None
     archived: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# -----------------------------------------------------------------------------
+# Event relations: speakers, sponsor links, partner links
+# -----------------------------------------------------------------------------
+#
+# These manage the many-to-* tables that hang off an event (event_speaker,
+# event_sponsor, event_partner). The public website reads them via the /website
+# feed; the dashboard + MCP write them here. Logos/headshots live in media_asset
+# and are reused across events (uploaded once per sponsor/partner/speaker).
+
+
+class EventSpeakerBase(BaseModel):
+    """All fields optional — reused for add and update (PATCH)."""
+
+    # Link an existing roster person (autofills the display name) OR give a
+    # free-text name for an external guest not in the directory.
+    person_id: int | None = None
+    name: str | None = None
+    title: str | None = None  # e.g. "CTO at Acme"
+    bio: str | None = None
+    sort_order: int | None = None
+
+
+class EventSpeakerCreate(EventSpeakerBase):
+    """Add a speaker — needs a person_id or a name (validated in the service)."""
+
+
+class EventSpeakerUpdate(EventSpeakerBase):
+    """Every field optional; only those set are applied."""
+
+
+class EventSpeakerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    person_id: int | None
+    name: str | None
+    title: str | None
+    bio: str | None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class EventSponsorLink(BaseModel):
+    """Link a sponsor to an event for the event's sponsor wall."""
+
+    sponsor_id: int
+    tier: str | None = None  # optional per-event tier override
+    sort_order: int | None = None
+
+
+class EventSponsorOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    sponsor_id: int
+    tier: str | None
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class EventPartnerLink(BaseModel):
+    """Link a partner (collaborator club/org) to an event."""
+
+    partner_id: int
+    role: str | None = None  # optional per-event label
+    sort_order: int | None = None
+
+
+class EventPartnerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    partner_id: int
+    role: str | None
+    sort_order: int
     created_at: datetime
     updated_at: datetime

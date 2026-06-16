@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     SUPABASE_STORAGE_BUCKET: str = "media"
     MEDIA_MAX_UPLOAD_BYTES: int = 15_000_000  # 15 MB per source image
     MEDIA_MAX_DIMENSION: int = 2000  # longest side, px (downscaled if larger)
+    # Hard byte budgets for the two derivatives. The Pillow pipeline steps down
+    # quality (then pixel dimensions) until the encoded bytes fit under these.
+    # WebP is the on-screen image; the download is a JPEG (opaque images) or a
+    # PNG (transparent logos, which JPEG can't represent).
+    MEDIA_WEBP_MAX_BYTES: int = 100_000  # display webp ceiling (~100 KB)
+    MEDIA_DOWNLOAD_MAX_BYTES: int = 200_000  # download (jpeg/png) ceiling (~200 KB)
     # Document/image attachments (sponsors) — PDFs allowed, auto-compressed.
     ATTACHMENT_MAX_UPLOAD_BYTES: int = 25_000_000  # 25 MB per source file
 

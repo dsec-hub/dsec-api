@@ -24,12 +24,15 @@ def list_events(
     type: str | None = None,
     trimester: str | None = None,
     event_lead_id: int | None = None,
+    is_public: bool | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Event]:
     stmt = select(Event)
     if not archived:
         stmt = stmt.where(Event.archived.is_(False))
+    if is_public is not None:
+        stmt = stmt.where(Event.is_public.is_(is_public))
     if status:
         stmt = stmt.where(Event.status == status)
     if type:

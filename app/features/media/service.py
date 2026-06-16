@@ -82,10 +82,15 @@ def create_media(
 
     uid = uuid.uuid4().hex
     base = f"{entity_type}/{entity_id}/{uid}"
-    webp_path, png_path = f"{base}.webp", f"{base}.png"
+    webp_path = f"{base}.webp"
+    # The download is a JPEG (opaque) or PNG (logo); the png_* columns hold it
+    # whatever the format — the extension/content-type follow `processed`.
+    download_path = f"{base}.{processed.download_ext}"
 
     webp_url = storage.upload_object(webp_path, processed.webp_bytes, "image/webp")
-    png_url = storage.upload_object(png_path, processed.png_bytes, "image/png")
+    download_url = storage.upload_object(
+        download_path, processed.download_bytes, processed.download_content_type
+    )
 
     asset = MediaAsset(
         entity_type=entity_type,
@@ -94,9 +99,9 @@ def create_media(
         alt_text=alt_text,
         original_filename=filename,
         webp_url=webp_url,
-        png_url=png_url,
+        png_url=download_url,
         webp_path=webp_path,
-        png_path=png_path,
+        png_path=download_path,
         width=processed.width,
         height=processed.height,
         size_bytes=len(processed.webp_bytes),
