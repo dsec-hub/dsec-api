@@ -93,6 +93,22 @@ class Settings(BaseSettings):
     DISCORD_WEBHOOK_SECRET: str = ""
     CALCOM_WEBHOOK_SECRET: str = ""
 
+    # --- CORS (browser origins allowed to call the API directly) ---
+    # Server-to-server callers (our Next.js apps' server code) are NOT subject to
+    # CORS — this only governs fetches issued from a browser tab on one of our own
+    # subdomains (e.g. a client component on hub.dsec.club / app.dsec.club).
+    # Comma-separated; defaults cover the prod subdomains + local dev ports.
+    CORS_ALLOW_ORIGINS: str = (
+        "https://dsec.club,https://www.dsec.club,"
+        "https://app.dsec.club,https://hub.dsec.club,"
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+    )
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        """CORS_ALLOW_ORIGINS parsed into a clean list of origins."""
+        return [o.strip() for o in self.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

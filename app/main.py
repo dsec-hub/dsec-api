@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
 
     _register_exception_handlers(app)
     _register_request_size_limit(app)
+    _register_cors(app)
     _register_gated_docs(app)
 
     # --- Mount features. One line each; order is cosmetic. ---
@@ -184,6 +186,24 @@ def _register_request_size_limit(app: FastAPI) -> None:
                         content={"detail": "request body too large"},
                     )
         return await call_next(request)
+
+
+def _register_cors(app: FastAPI) -> None:
+    """Allow our own browser front-ends to call the API cross-origin.
+
+    Only browser-issued requests are affected; the Next.js apps' server-side
+    fetches aren't subject to CORS. The allowlist (CORS_ALLOW_ORIGINS) covers
+    dsec.club, the app./hub. subdomains, and local dev ports by default. Added
+    last so it sits outermost — it answers preflight `OPTIONS` and tags error
+    responses too.
+    """
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins_list,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key"],
+    )
 
 
 def _register_gated_docs(app: FastAPI) -> None:
