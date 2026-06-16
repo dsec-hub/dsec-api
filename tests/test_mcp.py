@@ -125,3 +125,30 @@ def test_http_endpoint_rejects_bad_key(client):
     r = client.post("/mcp", headers={"Authorization": "Bearer dsec_live_bogus"},
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert r.status_code == 401
+
+
+def test_extract_key_reads_bearer_header():
+    headers = {b"authorization": b"Bearer dsec_live_abc"}
+    assert mcpauth._extract_key(headers) == "dsec_live_abc"
+
+
+def test_extract_key_reads_x_api_key_header():
+    headers = {b"x-api-key": b"dsec_live_xyz"}
+    assert mcpauth._extract_key(headers) == "dsec_live_xyz"
+
+
+def test_extract_key_reads_query_param():
+    # Claude.ai's "Add custom connector" dialog has no header field, so the key
+    # rides in the URL as ?key=… (or ?api_key=…).
+    assert mcpauth._extract_key({}, b"key=dsec_live_qs") == "dsec_live_qs"
+    assert mcpauth._extract_key({}, b"foo=1&api_key=dsec_live_qs2") == "dsec_live_qs2"
+
+
+def test_extract_key_header_wins_over_query_param():
+    headers = {b"authorization": b"Bearer dsec_live_hdr"}
+    assert mcpauth._extract_key(headers, b"key=dsec_live_qs") == "dsec_live_hdr"
+
+
+def test_extract_key_none_when_absent():
+    assert mcpauth._extract_key({}, b"") is None
+    assert mcpauth._extract_key({}, b"key=") is None

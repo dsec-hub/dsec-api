@@ -1108,3 +1108,113 @@ class Attachment(Base):
     __table_args__ = (
         Index("ix_attachment_entity", "entity_type", "entity_id"),
     )
+
+
+# =============================================================================
+# OAuth 2.1 authorization server (login-based auth for the MCP endpoint)
+# =============================================================================
+#
+# These power the OAuth flow that lets an MCP client (e.g. Claude.ai's "Add
+# custom connector", whose dialog accepts only a URL) authenticate by *logging
+# in* instead of pasting a dsec_live_ key. dsec-api is both the authorization
+# server and the resource server (the /mcp endpoint), so token validation is a
+# local DB lookup — no JWT signing keys to rotate, and revocation is instant.
+#
+# Tokens and codes are opaque, high-entropy (256-bit) secrets stored ONLY as
+# SHA-256 hashes. A fast hash is cryptographically sufficient here (unlike user
+# passwords, there is nothing low-entropy to brute-force), and it keeps the
+# per-request access-token check cheap. A short indexed `*_prefix` gives an O(1)
+# lookup before the constant-time hash compare, mirroring the API-key design.
+
+
+class OAuthClient(Base):
+    """A registered OAuth client. Created via Dynamic Client Registration
+    (RFC 7591) — MCP clients self-register, so almost all are *public* (PKCE, no
+    secret). `redirect_uris`/`grant_types`/`response_types` are JSON arrays."""
+
+    __tablename__ = "oauth_client"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Null for public clients (token_endpoint_auth_method="none"); set + hashed
+    # for confidential clients. The raw secret is shown once at registration.
+    client_secret_hash: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    client_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    redirect_uris: Mapped[list] = mapped_column(JSON, default=list)
+    grant_types: Mapped[list] = mapped_column(JSON, default=list)
+    response_types: Mapped[list] = mapped_column(JSON, default=list)
+    # Space-delimited scopes this client may ever request; further bounded at
+    # consent by the logged-in user's role (see features/oauth/users.py).
+    scope: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    token_endpoint_auth_method: Mapped[str] = mapped_column(
+        String(32), default="none", server_default="none"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class OAuthAuthCode(Base):
+    """A single-use PKCE authorization code. Stored hashed; short-lived. Bound to
+    the client, user, redirect_uri, code_challenge, granted scope, and resource."""
+
+    __tablename__ = "oauth_auth_code"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    client_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    redirect_uri: Mapped[str] = mapped_column(String(1024))
+    scope: Mapped[str] = mapped_column(String(256), default="", server_default="")
+    code_challenge: Mapped[str] = mapped_column(String(256))
+    code_challenge_method: Mapped[str] = mapped_column(
+        String(8), default="S256", server_default="S256"
+    )
+    resource: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+
+class OAuthToken(Base):
+    """An issued access token (+ optional refresh token), both opaque + hashed.
+
+    Looked up on every MCP request by `access_prefix` (indexed), then the full
+    SHA-256 hash is compared in constant time. Refresh tokens *rotate*: each use
+    issues a fresh pair and revokes the presented one; presenting an already-used
+    (revoked) refresh token revokes the whole user+client family (replay defence).
+    """
+
+    __tablename__ = "oauth_token"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    access_prefix: Mapped[str] = mapped_column(String(32), index=True)
+    access_token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    refresh_prefix: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    refresh_token_hash: Mapped[str | None] = mapped_column(
+        String(128), unique=True, index=True, nullable=True
+    )
+    client_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    scope: Mapped[str] = mapped_column(String(256), default="", server_default="")
+    resource: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    refresh_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

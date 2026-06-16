@@ -42,6 +42,7 @@ from .schemas import (
     PublicEventSponsor,
     PublicLead,
     PublicMedia,
+    PublicPartner,
     PublicPerson,
     PublicProject,
     PublicRelatedEvent,
@@ -439,6 +440,32 @@ def public_sponsors(request: Request, db: Session = Depends(get_db)) -> list[Pub
             continue
         out.append(
             PublicSponsor(name=s.organisation, website=s.website, logo=webp, logo_png=png)
+        )
+    return out
+
+
+@router.get("/partners", response_model=list[PublicPartner])
+def public_partners(request: Request, db: Session = Depends(get_db)) -> list[PublicPartner]:
+    """Published partners (collaborator clubs opted in via show_on_website) for
+    the public 'clubs & partners we work with' wall. Internal-only partners (the
+    default) never leak here. A logo is optional — the site falls back to the
+    club name — so, unlike sponsors, logo-less partners are still included."""
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    rows = db.execute(
+        select(Partner)
+        .where(Partner.archived.is_(False), Partner.show_on_website.is_(True))
+        .order_by(Partner.name.asc())
+    ).scalars().all()
+    if not rows:
+        return []
+    logos = media_service.list_media_for(
+        db, entity_type="partner", entity_ids=[p.id for p in rows]
+    )
+    out: list[PublicPartner] = []
+    for p in rows:
+        webp, png = _role_media(logos.get(p.id, []), "logo")
+        out.append(
+            PublicPartner(name=p.name, website=p.website, logo=webp, logo_png=png)
         )
     return out
 

@@ -38,6 +38,7 @@ from app.features.media.router import router as media_router
 from app.features.mcp.auth import MCPAuthMiddleware
 from app.features.mcp.router import router as mcp_guide_router
 from app.features.mcp.server import mcp, mcp_app
+from app.features.oauth.router import router as oauth_router
 from app.features.meetings.router import router as meetings_router
 from app.features.members.router import router as members_router
 from app.features.partners.router import router as partners_router
@@ -118,8 +119,15 @@ def create_app() -> FastAPI:
     app.include_router(discord_router, prefix="/discord", tags=["discord"])
     app.include_router(calcom_router, prefix="/calcom", tags=["calcom"])
 
-    # Mount the MCP server (Starlette sub-app) behind API-key auth. Clients
-    # connect to /mcp; the setup guide lives at /mcp-setup.
+    # OAuth 2.1 authorization server (login-based auth for MCP clients whose
+    # connector dialog only takes a URL). Mounted at the ROOT — no prefix — so
+    # the /.well-known/* discovery documents sit where the RFCs require. Guarded
+    # by a flag so it can be switched off cleanly.
+    if settings.OAUTH_ENABLED:
+        app.include_router(oauth_router, tags=["oauth"])
+
+    # Mount the MCP server (Starlette sub-app) behind API-key / OAuth auth.
+    # Clients connect to /mcp; the setup guide lives at /mcp-setup.
     app.mount("/mcp", MCPAuthMiddleware(mcp_app))
 
     @app.get("/health", tags=["meta"])

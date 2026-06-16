@@ -57,10 +57,17 @@ def _connect_section(server_url: str) -> str:
 
 - **Server URL:** `{server_url}`
 - **Transport:** Streamable HTTP
-- **Auth:** send the key as a header — `Authorization: Bearer {PLACEHOLDER}`
+- **Auth:** either sign in with a DSEC account (OAuth) or send a key as a header —
+  `Authorization: Bearer {PLACEHOLDER}`
 
-Replace `{PLACEHOLDER}` with the real `dsec_live_…` key (shown only once when it
-was minted at **Settings → API & MCP** in the dashboard).
+There are two ways to connect:
+
+1. **Sign in (OAuth, no token).** Paste just the server URL into a client that
+   supports OAuth (e.g. Claude.ai's *Add custom connector*). The client opens a
+   DSEC sign-in page; log in and approve. Access is bounded by your dashboard
+   role. Nothing to paste here — skip the key steps below.
+2. **API key.** Replace `{PLACEHOLDER}` with a real `dsec_live_…` key (shown once
+   when minted at **Settings → API & MCP** in the dashboard) using one of:
 
 **Claude Code (CLI)**
 ```bash
@@ -81,8 +88,14 @@ claude mcp add --transport http dsec {server_url} \\
 }}
 ```
 
-**Claude.ai / ChatGPT / Codex (custom connector)** — add a custom MCP connector,
-set the URL to `{server_url}`, and add the header
+**Claude.ai (Add custom connector)** — best path: paste just `{server_url}` and
+sign in when prompted (OAuth, option 1 above — no key needed). If you'd rather
+use a key, the dialog has no header field, so put the key in the URL:
+```
+{server_url}?key={PLACEHOLDER}
+```
+Treat that whole URL as a secret. ChatGPT / Codex custom connectors that *do*
+expose a header field can instead use `{server_url}` with
 `Authorization: Bearer {PLACEHOLDER}`."""
 
 

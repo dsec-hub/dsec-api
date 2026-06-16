@@ -237,3 +237,24 @@ def test_website_sponsors_wall_only_published_with_logo(client, db):
     wall = client.get("/website/sponsors").json()  # no auth
     names = {s["name"] for s in wall}
     assert names == {"Shown"}  # NoLogo excluded (no logo), Hidden excluded (flag off)
+
+
+def test_website_partners_wall_published_logo_optional(client, db):
+    published = models.Partner(name="Logo Club", show_on_website=True)
+    no_logo = models.Partner(name="Nameonly Club", show_on_website=True)
+    hidden = models.Partner(name="Hidden Club", show_on_website=False)
+    archived = models.Partner(name="Archived Club", show_on_website=True, archived=True)
+    db.add_all([published, no_logo, hidden, archived])
+    db.commit()
+    _media(db, entity_type="partner", entity_id=published.id, role="logo", webp="http://x/p.webp")
+    db.commit()
+
+    wall = client.get("/website/partners").json()  # no auth
+    by_name = {p["name"]: p for p in wall}
+    # Logo-less but published partners are still shown (unlike sponsors); the
+    # site falls back to the club name. Hidden + archived never leak.
+    assert set(by_name) == {"Logo Club", "Nameonly Club"}
+    assert by_name["Logo Club"]["logo"] == "http://x/p.webp"
+    assert by_name["Nameonly Club"]["logo"] is None
+    # Ordered by name.
+    assert [p["name"] for p in wall] == ["Logo Club", "Nameonly Club"]

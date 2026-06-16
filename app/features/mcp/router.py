@@ -41,7 +41,14 @@ your key allows.
 
 **Server URL:** `{SERVER_URL}`
 **Transport:** Streamable HTTP
-**Auth:** send your key as a header — `Authorization: Bearer dsec_live_…`
+**Auth:** sign in with your DSEC account (OAuth) **or** send a key as a header
+(`Authorization: Bearer dsec_live_…`).
+
+### Easiest — sign in (OAuth, no key)
+In Claude.ai → **Settings → Connectors → Add custom connector**, paste just
+`{SERVER_URL}` and click Add. Claude opens a DSEC sign-in page; log in with your
+dashboard account and approve. Access is bounded by your role; revoke any time.
+(Step 1 is optional if you connect this way.)
 
 ### Claude (Desktop / Code) — `claude_desktop_config.json`
 ```json
@@ -56,9 +63,11 @@ your key allows.
 }}
 ```
 
-### Claude.ai / ChatGPT (custom connector)
-Add a custom MCP/connector, set the URL to `{SERVER_URL}`, and add the header
-`Authorization: Bearer dsec_live_YOUR_KEY`.
+### Claude.ai (Add custom connector)
+The connector dialog accepts only a URL (no header field), so put the key in the
+URL: `{SERVER_URL}?key=dsec_live_YOUR_KEY`. Treat that whole URL as a secret.
+(ChatGPT / Codex connectors that expose a header field can instead use
+`{SERVER_URL}` with `Authorization: Bearer dsec_live_YOUR_KEY`.)
 
 ## 3. Try it
 Ask your assistant things like:

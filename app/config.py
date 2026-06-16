@@ -59,6 +59,27 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_IP_PER_MIN: int = 120
     MAX_REQUEST_BYTES: int = 100_000
 
+    # --- OAuth 2.1 (MCP authorization server) ---
+    # The /mcp endpoint ALSO accepts OAuth 2.1 access tokens (alongside the
+    # dsec_live_ API keys), so MCP clients whose "add connector" dialog only takes
+    # a URL (e.g. Claude.ai) can connect → log in → approve, with no key pasting.
+    # dsec-api is BOTH the authorization server and the resource server: it
+    # authenticates users against the shared app_user/app_role tables and issues
+    # opaque, DB-backed tokens, so validation is a local lookup (no JWT keys to
+    # manage) and revocation is instant. The HMAC that signs the in-flight
+    # authorize request reuses AGENT_SECRET (already required non-default in prod).
+    OAUTH_ENABLED: bool = True
+    # Public issuer origin used in discovery metadata + the resource (audience) id.
+    # Blank → derived per-request from the (proxy-aware) Host, which is what you
+    # want locally and in tests. Pin it in production (e.g. https://api.dsec.club)
+    # so the issuer can't be influenced by a spoofed Host header.
+    OAUTH_ISSUER: str = ""
+    OAUTH_ACCESS_TOKEN_TTL: int = 3600  # access token lifetime, seconds (1 hour)
+    OAUTH_REFRESH_TOKEN_TTL: int = 60 * 60 * 24 * 60  # refresh lifetime (60 days)
+    OAUTH_AUTH_CODE_TTL: int = 600  # authorization-code lifetime (10 minutes)
+    OAUTH_ACCESS_TOKEN_PREFIX: str = "dsec_at_"
+    OAUTH_REFRESH_TOKEN_PREFIX: str = "dsec_rt_"
+
     # --- Supabase Storage (image media for events/projects) ---
     # Server-side only. The service-role key bypasses RLS — never expose it to
     # the browser. Create a PUBLIC bucket named SUPABASE_STORAGE_BUCKET in the

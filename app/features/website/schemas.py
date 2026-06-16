@@ -106,6 +106,18 @@ class PublicSponsor(BaseModel):
     logo_png: str | None
 
 
+class PublicPartner(BaseModel):
+    """A published partner (collaborator club) for the public /website/partners
+    logo wall. Only partners opted in via show_on_website appear — partners are
+    internal by default. Unlike sponsors, a logo is optional: the site renders
+    the club name when none is uploaded."""
+
+    name: str
+    website: str | None
+    logo: str | None        # transparent logo (webp); null = no logo uploaded
+    logo_png: str | None
+
+
 class PublicRelatedEvent(BaseModel):
     """A published event linked to this one (a visual-only relation). Carries
     just enough to render a clickable list item on the event page."""
