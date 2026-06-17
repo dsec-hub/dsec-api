@@ -47,13 +47,21 @@ class NeonRateLimiter:
     def _bump_minute(self, db: Session, *, key_id: int | None, bucket: str) -> int:
         now = datetime.now(timezone.utc)
         window = _minute_window(now)
+        # `.first()`, not `.scalar_one_or_none()`: the unique constraint is on
+        # (key_id, window_start) and excludes `bucket`, and Postgres treats NULL
+        # key_ids as distinct — so concurrent per-IP (key_id=None) requests can
+        # race in duplicate rows for the same bucket+window. `.first()` tolerates
+        # that (picks one, increments it) instead of raising MultipleResultsFound
+        # and 500-ing the request.
         row = db.execute(
-            select(RateLimit).where(
+            select(RateLimit)
+            .where(
                 RateLimit.key_id == key_id,
                 RateLimit.bucket == bucket,
                 RateLimit.window_start == window,
             )
-        ).scalar_one_or_none()
+            .order_by(RateLimit.id)
+        ).scalars().first()
         if row is None:
             row = RateLimit(key_id=key_id, bucket=bucket, window_start=window, count=0)
             db.add(row)

@@ -115,6 +115,16 @@ def test_trigger_scope_required_for_notes(db):
             mcpserver.generate_meeting_notes(meeting_id=1)
 
 
+def test_mcp_transport_security_does_not_block_remote_host():
+    # FastMCP auto-applies a localhost-only Host allowlist (its default host is
+    # 127.0.0.1), which 421s every real request to a remote deploy
+    # (Host: api.dsec.club). We override it; with MCP_ALLOWED_HOSTS unset the
+    # DNS-rebinding check must be OFF so prod requests aren't rejected.
+    ts = mcpserver.mcp.settings.transport_security
+    assert ts is not None
+    assert ts.enable_dns_rebinding_protection is False
+
+
 def test_http_endpoint_requires_key(client):
     # The mounted /mcp endpoint is behind MCPAuthMiddleware — no key -> 401.
     r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
+from app.config import settings
 from app.core.llm import LLMError
 from app.core.ratelimit import limiter
 from app.db import SessionLocal
@@ -87,7 +89,33 @@ meeting-notes needs 'trigger'. Image/file uploads happen in the dashboard, not
 here — the media/attachment tools are read-only listings. Dates are ISO
 YYYY-MM-DD; events and projects are drafts until you set is_public=true."""
 
-mcp = FastMCP("DSEC", stateless_http=True, streamable_http_path="/", instructions=_INSTRUCTIONS)
+def _transport_security() -> TransportSecuritySettings:
+    """DNS-rebinding protection for the streamable-HTTP transport.
+
+    FastMCP auto-applies a localhost-only Host allowlist when its host is
+    127.0.0.1 (the default), which 421s every request to a remote deploy
+    (Host: api.dsec.club). dsec-api is a remote, token-authenticated HTTPS API,
+    so we override that: an explicit MCP_ALLOWED_HOSTS list enables protection
+    scoped to those hosts; blank (default) disables the check (a DNS-rebinding
+    attacker can't supply a valid bearer token, and CORS already pins origins).
+    """
+    hosts = [h.strip() for h in settings.MCP_ALLOWED_HOSTS.split(",") if h.strip()]
+    if not hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"https://{h}" for h in hosts],
+    )
+
+
+mcp = FastMCP(
+    "DSEC",
+    stateless_http=True,
+    streamable_http_path="/",
+    instructions=_INSTRUCTIONS,
+    transport_security=_transport_security(),
+)
 
 
 # --------------------------------------------------------------------------- #

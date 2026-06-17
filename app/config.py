@@ -80,6 +80,17 @@ class Settings(BaseSettings):
     OAUTH_ACCESS_TOKEN_PREFIX: str = "dsec_at_"
     OAUTH_REFRESH_TOKEN_PREFIX: str = "dsec_rt_"
 
+    # --- MCP transport security (DNS-rebinding protection) ---
+    # The MCP SDK auto-enables a localhost-only Host allowlist, which 421s every
+    # real request to a remote deploy (Host: api.dsec.club). This is a remote,
+    # token-authenticated HTTPS API, so that protection is unnecessary. Comma-
+    # separated Host allowlist (supports a ":*" port wildcard, e.g. "localhost:*").
+    # BLANK (default) DISABLES the check — correct here, since /mcp already
+    # requires a bearer key/OAuth token and CORS pins browser origins, and the
+    # Host is dynamic (api.dsec.club + *.vercel.app previews). Set it to lock the
+    # transport to specific hosts.
+    MCP_ALLOWED_HOSTS: str = ""
+
     # --- Supabase Storage (image media for events/projects) ---
     # Server-side only. The service-role key bypasses RLS — never expose it to
     # the browser. Create a PUBLIC bucket named SUPABASE_STORAGE_BUCKET in the
