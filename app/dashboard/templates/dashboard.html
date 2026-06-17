@@ -3,77 +3,165 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
   <title>DSEC Agent — Activity Log</title>
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; padding: 1.5rem; }
-    h1 { font-size: 1.25rem; margin: 0 0 1rem; }
-    form { margin-bottom: 1rem; display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-    select, button { padding: .35rem .5rem; font-size: .9rem; }
-    table { border-collapse: collapse; width: 100%; font-size: .85rem; }
-    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8884; vertical-align: top; }
-    th { position: sticky; top: 0; background: Canvas; }
-    .tag { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .75rem; background: #8883; }
-    .out { max-width: 32rem; white-space: pre-wrap; opacity: .85; }
-    .muted { opacity: .6; }
-    code { font-size: .8rem; }
+    /* Theme tokens mirror dsec-hub's dark theme (src/app/globals.css): near-pure-black
+       Resend canvas, off-white ink, translucent-white hairlines, DSEC Action Pink
+       lifted to #ff5c8a for the dark floor. Titles run the system mono stack — the
+       same fallback the hub renders before its Geist Mono web font loads. */
+    :root {
+      --bg:#000; --surface:#0a0a0c; --elevated:#141416;
+      --border:rgba(255,255,255,.1); --border-strong:rgba(255,255,255,.16);
+      --fg:#fcfdff; --muted:#9a9da0; --body:#cdd0d3;
+      --accent:#ff5c8a; --accent-fg:#1a0a10;
+      --r-control:10px;
+      --font-sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;
+      --font-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"Cascadia Code","Roboto Mono",monospace;
+    }
+    * { box-sizing:border-box; }
+    html { color-scheme:dark; }
+    body {
+      margin:0; padding:28px 24px 64px; color:var(--fg);
+      font:14px/1.55 var(--font-sans);
+      -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+      background:radial-gradient(60% 32% at 50% -4%, rgba(255,92,138,.08), transparent 60%), var(--bg);
+    }
+    .wrap { max-width:1180px; margin:0 auto; }
+    header { display:flex; align-items:center; gap:13px; margin:0 0 4px; }
+    .logo { height:26px; width:auto; display:block; }
+    h1 {
+      font-family:var(--font-mono); font-size:17px; font-weight:600; letter-spacing:-.01em;
+      margin:0; display:flex; align-items:baseline; gap:9px;
+    }
+    h1 .count { color:var(--muted); font-weight:400; font-size:13px; }
+    .lead { color:var(--muted); font-size:13px; margin:7px 0 22px; }
+
+    form { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; margin:0 0 18px; }
+    .field { display:flex; flex-direction:column; gap:6px; }
+    .field > span { font-size:12px; color:var(--muted); letter-spacing:.01em; }
+    select {
+      appearance:none; -webkit-appearance:none;
+      padding:8px 32px 8px 12px; min-width:150px; border-radius:var(--r-control);
+      border:1px solid var(--border); background:#070709; color:var(--fg);
+      font:13px/1 var(--font-sans); cursor:pointer;
+      background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+      background-position:calc(100% - 17px) 52%, calc(100% - 12px) 52%;
+      background-size:5px 5px, 5px 5px; background-repeat:no-repeat;
+      transition:border-color .15s ease, box-shadow .15s ease;
+    }
+    select:hover { border-color:var(--border-strong); }
+    select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(255,92,138,.16); }
+    button {
+      padding:9px 16px; border-radius:var(--r-control); border:1px solid transparent;
+      background:var(--accent); color:var(--accent-fg); font:600 13px var(--font-sans); cursor:pointer;
+      transition:transform .12s cubic-bezier(.16,1,.3,1), filter .16s ease;
+    }
+    button:hover { filter:brightness(1.07); }
+    button:active { transform:scale(.98); }
+
+    .panel { border:1px solid var(--border); border-radius:14px; overflow:hidden; background:var(--surface); }
+    .scroll { overflow:auto; max-height:74vh; }
+    table { border-collapse:collapse; width:100%; font-size:13px; }
+    thead th {
+      position:sticky; top:0; z-index:1; text-align:left; white-space:nowrap;
+      padding:11px 14px; background:var(--elevated);
+      font:600 11px/1 var(--font-mono); letter-spacing:.04em; text-transform:uppercase; color:var(--muted);
+      border-bottom:1px solid var(--border);
+    }
+    tbody td { padding:11px 14px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--body); }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr:hover td { background:rgba(255,255,255,.025); }
+    .tag {
+      display:inline-block; padding:2px 8px; border-radius:999px; font:500 11px var(--font-mono);
+      letter-spacing:.01em; color:var(--fg); background:var(--elevated); border:1px solid var(--border);
+    }
+    .mono { font-family:var(--font-mono); font-size:12px; color:var(--muted); white-space:nowrap; }
+    .out { max-width:30rem; white-space:pre-wrap; color:var(--muted); }
+    .empty { padding:48px 16px; text-align:center; color:var(--muted); }
+    @media (prefers-reduced-motion:reduce) {
+      * { transition-duration:.001ms !important; }
+    }
   </style>
 </head>
 <body>
-  <h1>DSEC Agent — Activity Log <span class="muted">({{ rows|length }} rows)</span></h1>
+  <div class="wrap">
+    <header>
+      <svg class="logo" viewBox="0 0 76 48" fill="none" role="img" aria-label="DSEC" xmlns="http://www.w3.org/2000/svg">
+        <path d="M55.2514 14.5498H43.6484V32.7831H55.2514V29.0485H47.5161V25.314H53.7473V21.7992H47.5161V18.2843H55.2514V14.5498Z" fill="#D63384"/>
+        <path d="M36.8447 25.1593L20.2773 17.1033V20.1515C20.3804 21.2625 20.6323 21.6937 21.6204 22.07L38.6963 30.4919V27.5543C38.5818 26.3716 38.2039 25.8364 36.8447 25.1593Z" fill="#D63384"/>
+        <path d="M61.1535 29.0441C60.0141 27.4715 59.4056 25.5767 59.4162 23.6348L63.5323 23.6572C63.5265 24.7241 63.8608 25.7652 64.4868 26.6292C65.1128 27.4932 65.9978 28.1352 67.0134 28.4621C68.029 28.789 69.1224 28.7837 70.1348 28.447C71.1473 28.1103 71.2379 27.7197 72.7425 27.4461C74.2471 27.1725 76.0001 28.9724 76.0001 28.9724C74.876 30.556 73.2765 31.7401 71.4337 32.3529C69.591 32.9657 67.6009 32.9753 65.7523 32.3804C63.9037 31.7854 62.2928 30.6168 61.1535 29.0441Z" fill="#D63384"/>
+        <path d="M61.1535 18.3252C60.0141 19.8979 59.4056 21.7927 59.4162 23.7346L63.5323 23.7122C63.5265 22.6452 63.8608 21.6042 64.4868 20.7402C65.1128 19.8762 65.9978 19.2342 67.0134 18.9073C68.029 18.5804 69.1224 18.5857 70.1348 18.9224C71.1473 19.2591 71.2379 19.6497 72.7425 19.9233C74.2471 20.1968 76.0001 18.397 76.0001 18.397C74.876 16.8134 73.2765 15.6293 71.4337 15.0165C69.591 14.4037 67.6009 14.394 65.7523 14.989C63.9037 15.584 62.2928 16.7526 61.1535 18.3252Z" fill="#D63384"/>
+        <path d="M4.14392 23.6664H0V14.5498H7.63354C12.868 14.5498 16.5757 18.8911 16.5757 23.6664H12.4318C12.4318 20.8446 10.3598 18.674 7.63354 18.674C6.01929 18.6314 4.14392 18.674 4.14392 18.674V23.6664Z" fill="#D63384"/>
+        <path d="M4.14392 23.6663H0V32.783H7.63354C12.868 32.783 16.5757 28.4417 16.5757 23.6663H12.4318C12.4318 26.4881 10.3598 28.6588 7.63354 28.6588C6.01929 28.7014 4.14392 28.6588 4.14392 28.6588V23.6663Z" fill="#D63384"/>
+        <path d="M30.6785 0H27.4414C29.2212 5.00649 30.3169 7.80293 32.3923 12.7777C33.1562 13.779 33.6579 14.2282 34.8677 14.5498H38.676L33.1539 2.14516C32.354 0.617519 31.814 0.152977 30.6785 0Z" fill="#19E6E6"/>
+        <path d="M28.916 6.44619C28.916 5.52532 26.7519 0.736788 26.7519 0.736788C25.5087 0.644703 23.5625 7.27159 20.2598 14.5499H23.9292C24.8283 14.1787 25.2703 13.7771 25.9992 12.8002C26.5637 11.9714 28.916 6.81454 28.916 6.44619Z" fill="#009A9C"/>
+        <path d="M28.257 47.3328H31.4941C29.7143 42.3263 28.6187 39.5298 26.5433 34.5551C25.7794 33.5538 25.2776 33.1046 24.0679 32.783H20.2595L25.7816 45.1876C26.5816 46.7152 27.1216 47.1798 28.257 47.3328Z" fill="#19E6E6"/>
+        <path d="M30.0196 40.8866C30.0196 41.8074 32.1836 46.596 32.1836 46.596C33.4268 46.6881 35.373 40.0612 38.6758 32.7829H35.0063C34.1072 33.154 33.6652 33.5556 32.9364 34.5326C32.3718 35.3613 30.0196 40.5182 30.0196 40.8866Z" fill="#009A9C"/>
+      </svg>
+      <h1>Agent Activity Log <span class="count">{{ rows|length }} {{ 'row' if rows|length == 1 else 'rows' }}</span></h1>
+    </header>
+    <p class="lead">Every email, ingest, and AI action the DSEC agent has handled.</p>
 
-  <form method="get">
-    <label>source:
-      <select name="source">
-        <option value="">all</option>
-        {% for s in sources %}
-        <option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>action:
-      <select name="action">
-        <option value="">all</option>
-        {% for a in actions %}
-        <option value="{{ a }}" {% if a == action %}selected{% endif %}>{{ a }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <button type="submit">filter</button>
-  </form>
+    <form method="get">
+      <label class="field">
+        <span>Source</span>
+        <select name="source">
+          <option value="">All sources</option>
+          {% for s in sources %}
+          <option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span>Action</span>
+        <select name="action">
+          <option value="">All actions</option>
+          {% for a in actions %}
+          <option value="{{ a }}" {% if a == action %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filter</button>
+    </form>
 
-  <table>
-    <thead>
-      <tr>
-        <th>time (UTC)</th>
-        <th>source</th>
-        <th>sender</th>
-        <th>subject</th>
-        <th>class</th>
-        <th>action</th>
-        <th>output</th>
-        <th>tok / $</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td class="muted">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '' }}</td>
-        <td><span class="tag">{{ r.source }}</span></td>
-        <td>{{ r.sender or '' }}</td>
-        <td>{{ r.subject or '' }}</td>
-        <td>{{ r.classification or '' }}</td>
-        <td><span class="tag">{{ r.action or '' }}</span></td>
-        <td class="out">{{ (r.output or '')[:400] }}</td>
-        <td class="muted">
-          {%- if r.tokens %}{{ r.tokens }}{% endif -%}
-          {%- if r.cost %} / ${{ '%.4f'|format(r.cost) }}{% endif -%}
-        </td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8" class="muted">No activity yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <div class="panel">
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Time (UTC)</th>
+              <th>Source</th>
+              <th>Sender</th>
+              <th>Subject</th>
+              <th>Class</th>
+              <th>Action</th>
+              <th>Output</th>
+              <th>Tok / $</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td class="mono">{{ r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '' }}</td>
+              <td><span class="tag">{{ r.source }}</span></td>
+              <td>{{ r.sender or '' }}</td>
+              <td>{{ r.subject or '' }}</td>
+              <td>{{ r.classification or '' }}</td>
+              <td>{% if r.action %}<span class="tag">{{ r.action }}</span>{% endif %}</td>
+              <td class="out">{{ (r.output or '')[:400] }}</td>
+              <td class="mono">
+                {%- if r.tokens %}{{ r.tokens }}{% endif -%}
+                {%- if r.cost %} / ${{ '%.4f'|format(r.cost) }}{% endif -%}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="empty">No activity yet. The agent's handled emails and AI runs will show up here.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
