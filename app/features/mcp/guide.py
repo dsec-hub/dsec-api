@@ -43,7 +43,7 @@ def _tool_sections(tools: list[Tool]) -> str:
         parts.append(f"### {group}")
         for t in items:
             flag = ""
-            if t.scope == "write":
+            if t.scope == "write" or t.scope.startswith("write:"):
                 flag = " _(write)_"
             elif t.scope == "trigger":
                 flag = " _(AI — spends tokens)_"
@@ -163,8 +163,10 @@ def _recipes_section(has_read: bool, has_write: bool, has_trigger: bool) -> str:
 def build_llm_guide(scopes: set[str], *, server_url: str, label: str | None = None) -> str:
     """Render the `llm.md` guide for a key holding `scopes`."""
     granted = _normalise(scopes)
-    has_read = "read" in granted
-    has_write = "write" in granted
+    # Module-aware: a per-module key (read:finance, write:sponsors, …) counts as
+    # read/write even without the legacy coarse scope.
+    has_write = any(s == "write" or s.startswith("write:") for s in granted)
+    has_read = has_write or any(s == "read" or s.startswith("read:") for s in granted)
     has_trigger = "trigger" in granted
 
     scope_list = ", ".join(f"`{s}`" for s in granted) if granted else "_(none)_"
@@ -192,9 +194,13 @@ change writes to the club's single source of truth and shows up in the dashboard
 
         "## What this key can do\n\n"
         + _scope_table(granted)
-        + "\n\nScopes are **coarse and global**: a `write` key can write *every* "
-          "module (not just one), and a `read` key can read everything. They are "
-          "bounded by the dashboard role of whoever minted the key, not by module.",
+        + "\n\nMost scopes are **coarse and global**: a legacy `write` key can "
+          "write *every* module and a legacy `read` key can read everything. The "
+          "**Sponsors** and **Finance** modules are **isolated** — their tools "
+          "require the matching `read:sponsors` / `write:sponsors` / `read:finance` "
+          "/ `write:finance` scope (a legacy `read`/`write` key still covers them "
+          "for backwards compatibility). What a key holds is bounded by the "
+          "dashboard role of whoever minted it.",
 
         _connect_section(server_url),
 

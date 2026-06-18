@@ -13,8 +13,6 @@ from contextlib import contextmanager
 
 import pytest
 
-from app import models
-from app.core.apikeys import generate_key
 from app.features.mcp import auth as mcpauth
 from app.features.mcp import server as mcpserver
 
@@ -113,6 +111,79 @@ def test_trigger_scope_required_for_notes(db):
     with as_key(["read", "write"]):
         with pytest.raises(mcpauth.MCPScopeError):
             mcpserver.generate_meeting_notes(meeting_id=1)
+
+
+# --------------------------------------------------------------------------- #
+# enforced-module isolation (Sponsors / Finance) + backward-compatible scopes
+# --------------------------------------------------------------------------- #
+
+def test_has_scope_backward_compatible_algebra():
+    has_scope = mcpauth.has_scope
+    R = frozenset
+    # legacy "read" ⊇ every read:* (kept working everywhere)
+    assert has_scope(R({"read"}), "read:sponsors")
+    assert has_scope(R({"read"}), "read:finance")
+    # legacy "write" ⊇ every write:*, every read:*, and legacy "read"
+    assert has_scope(R({"write"}), "write:finance")
+    assert has_scope(R({"write"}), "read:sponsors")
+    assert has_scope(R({"write"}), "read")
+    # write:X implies read:X
+    assert has_scope(R({"write:sponsors"}), "read:sponsors")
+    # module scopes match exactly — no cross-module bleed
+    assert not has_scope(R({"read:events"}), "read:sponsors")
+    assert not has_scope(R({"read:sponsors"}), "read:finance")
+    # legacy "read" never grants write or trigger
+    assert not has_scope(R({"read"}), "write")
+    assert not has_scope(R({"read"}), "write:sponsors")
+    assert not has_scope(R({"write"}), "trigger")
+    # a pure module key is NOT a legacy read — it can't reach the broad tools
+    assert not has_scope(R({"read:events"}), "read")
+
+
+def test_enforced_module_scope_isolation(db):
+    """The Phase-2A proof: a focus-only module key can't reach the isolated
+    Sponsors/Finance tools, a per-module key reaches only its module, and a
+    legacy `read` key still reaches everything (backward compatible)."""
+    # A key with only read:events is rejected by the enforced tools.
+    with as_key(["read:events"]):
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.list_sponsors()
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.finance_summary()
+    # A legacy read key is accepted by list_sponsors (and runs cleanly).
+    with as_key(["read"]):
+        assert mcpserver.list_sponsors() == []
+    # A per-module key reaches its own module but not the other enforced one.
+    with as_key(["read:sponsors"]):
+        assert mcpserver.list_sponsors() == []
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.finance_summary()
+
+
+def test_oauth_scope_derivation_isolates_enforced_modules(db, monkeypatch):
+    """`service.scopes_for_grant` never hands an enforced-module scope to a role
+    that lacks the module, keeps focus-only modules on legacy read/write, and
+    falls back to the coarse grant when the RBAC tables are absent."""
+    from app.features.oauth import service, users
+
+    # Treasurer (Finance only) → finance module scopes, no sponsors, no legacy r/w.
+    monkeypatch.setattr(users, "_role_perms", lambda d, u: (["finance"], ["finance"]))
+    assert set(service.scopes_for_grant(db, object(), {"read", "write"})) == {
+        "read:finance", "write:finance",
+    }
+    # Focus-only role (events/tasks) → legacy read/write, never *:sponsors/*:finance.
+    monkeypatch.setattr(users, "_role_perms", lambda d, u: (["events", "tasks"], ["events"]))
+    out = set(service.scopes_for_grant(db, object(), {"read", "write"}))
+    assert {"read", "write"} <= out
+    assert not any(s.endswith((":sponsors", ":finance")) for s in out)
+    # Admin superuser → explicit enforced-module scopes are present.
+    monkeypatch.setattr(users, "_role_perms", lambda d, u: (["admin"], ["admin"]))
+    out = set(service.scopes_for_grant(db, object(), {"read", "write", "trigger"}))
+    assert {"read:sponsors", "write:sponsors", "read:finance", "write:finance"} <= out
+    assert "trigger" in out
+    # No RBAC tables → unchanged coarse grant (backward compatible).
+    monkeypatch.setattr(users, "_role_perms", lambda d, u: (None, None))
+    assert set(service.scopes_for_grant(db, object(), {"read", "write"})) == {"read", "write"}
 
 
 def test_mcp_transport_security_does_not_block_remote_host():

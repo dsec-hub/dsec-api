@@ -12,6 +12,7 @@ class MeetingBase(BaseModel):
 
     title: str | None = None
     type: str | None = None
+    committee: str | None = None
     meeting_date: date | None = None
     location: str | None = None
     attendees: list | None = None
@@ -45,6 +46,7 @@ class MeetingOut(BaseModel):
     id: int
     title: str
     type: str | None
+    committee: str | None
     meeting_date: date | None
     location: str | None
     attendees: list | None

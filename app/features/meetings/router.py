@@ -25,6 +25,7 @@ router = APIRouter()
 def list_meetings(
     request: Request,
     type: str | None = None,
+    committee: str | None = None,
     status: str | None = None,
     related_event_id: int | None = None,
     include_archived: bool = False,
@@ -35,7 +36,7 @@ def list_meetings(
 ) -> list[MeetingOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_meetings(
-        db, archived=include_archived, type=type, status=status,
+        db, archived=include_archived, type=type, committee=committee, status=status,
         related_event_id=related_event_id, limit=limit, offset=offset,
     )
     return [MeetingOut.model_validate(r) for r in rows]

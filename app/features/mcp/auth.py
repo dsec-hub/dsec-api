@@ -72,11 +72,41 @@ def current_key() -> KeyContext | None:
     return _current_key.get()
 
 
+def has_scope(scopes: frozenset[str], required: str) -> bool:
+    """Does a credential carrying ``scopes`` satisfy ``required``?
+
+    Backward-compatible scope algebra so that every existing credential — the
+    ``dsec_live_`` keys and OAuth tokens that carry the legacy coarse
+    ``read``/``write`` — keeps working everywhere, while the new per-module
+    scopes (``read:sponsors``, ``write:finance``, …) provide tighter isolation:
+
+    - legacy ``"write"`` is a superset of every ``write:*``, every ``read:*`` and
+      legacy ``"read"``.
+    - legacy ``"read"`` is a superset of every ``read:*``.
+    - ``"write:X"`` satisfies ``"read:X"``.
+    - any other scope (``trigger``, ``ingest``, an exact module scope) matches
+      only itself.
+    """
+    if required in scopes:
+        return True
+    # Legacy "write" — the universal superset of every read/write scope, coarse
+    # or per-module, plus legacy "read".
+    if "write" in scopes and (required == "read" or required.startswith(("read:", "write:"))):
+        return True
+    # Legacy "read" covers every read scope (exact "read" handled above).
+    if "read" in scopes and required.startswith("read:"):
+        return True
+    # write:X implies read:X.
+    if required.startswith("read:") and f"write:{required[len('read:'):]}" in scopes:
+        return True
+    return False
+
+
 def require_scope(scope: str) -> KeyContext:
     ctx = _current_key.get()
     if ctx is None:
         raise MCPScopeError("not authenticated (no API key on this MCP session)")
-    if scope not in ctx.scopes:
+    if not has_scope(ctx.scopes, scope):
         raise MCPScopeError(
             f"your API key is missing the '{scope}' scope; "
             f"it has: {sorted(ctx.scopes) or 'none'}"

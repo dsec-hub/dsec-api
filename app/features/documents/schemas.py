@@ -12,6 +12,7 @@ class DocumentBase(BaseModel):
 
     title: str | None = None
     type: str | None = None
+    committee: str | None = None
     content: str | None = None
     content_json: dict | None = None
     status: str | None = None
@@ -38,6 +39,7 @@ class DocumentOut(BaseModel):
     id: int
     title: str
     type: str | None
+    committee: str | None
     content: str | None
     content_json: dict | None
     status: str | None

@@ -22,10 +22,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import OAuthAuthCode, OAuthClient, OAuthToken
+from app.models import AppUser, OAuthAuthCode, OAuthClient, OAuthToken
 
-# Scopes the authorization server understands (same coarse model as API keys).
+# Scopes the authorization server understands and advertises (the coarse model a
+# client requests). The issued access-token scope is *expanded* per the user's
+# role modules at issue time — see `scopes_for_grant` — so the enforced modules
+# (Sponsors, Finance) are carried as per-module scopes, never blanket read/write.
 SUPPORTED_SCOPES = ("read", "write", "trigger", "ingest")
+
+# Modules whose MCP tools are isolated behind per-module scopes (PHASE 2A). Every
+# other module stays "focus-only": represented by the legacy coarse read/write,
+# so the broad tools keep working unchanged.
+ENFORCED_MODULES = ("finance", "sponsors")
+
+# Every gateable workspace module (mirrors dsec-hub ROLES.md). "admin" is a
+# superuser flag rather than a data module, so it is expanded to "all modules"
+# instead of being emitted as a read:admin / write:admin scope.
+ALL_MODULES = (
+    "events", "people", "sponsors", "finance", "tasks",
+    "projects", "members", "meetings", "documents",
+)
 _PREFIX_RANDOM_LEN = 8
 
 
@@ -211,6 +227,47 @@ def consume_auth_code(db: Session, raw_code: str, *, client_id: str, redirect_ur
 # --------------------------------------------------------------------------- #
 # Access + refresh tokens
 # --------------------------------------------------------------------------- #
+
+def scopes_for_grant(db: Session, user: AppUser, coarse_granted: set[str]) -> list[str]:
+    """Expand a coarse OAuth grant (read/write/trigger/ingest the user actually
+    approved) into the module-aware scope list enforced at the MCP tool layer.
+
+    The enforced modules (Sponsors, Finance) are represented EXCLUSIVELY by their
+    per-module scopes (``read:sponsors``, ``write:finance``, …) and ONLY for a
+    user whose role actually grants the module — so a login without the module
+    never receives that module's scope and can't reach the isolated tools by
+    name. Every other (focus-only) module additionally yields the legacy coarse
+    ``read``/``write`` so the broad tools behave exactly as before.
+
+    The user's role modules come from ``app_role`` via ``app_user.role_id`` (the
+    same defensive join ``users.allowed_scopes_for`` uses). When those RBAC
+    tables aren't present (e.g. the SQLite test DB, or a pre-RBAC environment) we
+    fall back to the unchanged coarse grant — fully backward-compatible.
+    """
+    from app.features.oauth import users
+
+    coarse = set(coarse_granted)
+    modules, write_modules = users._role_perms(db, user)
+    if modules is None:
+        return sorted(coarse)  # no RBAC module info → legacy coarse behaviour
+
+    read_mods = set(modules)
+    write_mods = set(write_modules or [])
+    if "admin" in read_mods:  # superuser → the full module universe
+        read_mods = set(ALL_MODULES)
+        write_mods = set(ALL_MODULES)
+
+    out: set[str] = set(coarse & {"trigger", "ingest"})
+    if "read" in coarse:
+        out.update(f"read:{m}" for m in read_mods)
+        if any(m not in ENFORCED_MODULES for m in read_mods):
+            out.add("read")  # legacy read covers the focus-only modules
+    if "write" in coarse:
+        out.update(f"write:{m}" for m in write_mods)
+        if any(m not in ENFORCED_MODULES for m in write_mods):
+            out.add("write")
+    return sorted(out)
+
 
 @dataclass
 class IssuedTokens:

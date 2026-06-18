@@ -30,7 +30,14 @@ _hasher = PasswordHasher()
 # write  — create/update/archive workspace + domain data (no LLM spend).
 # trigger — actions that spend LLM credits (email drafting, meeting notes).
 # ingest — write DUSA weekly imports (membership / P&L) via /ingest.
-VALID_SCOPES = {"read", "write", "trigger", "ingest"}
+# read:<m>/write:<m> — per-module scopes for the "enforced" modules (Sponsors,
+#   Finance) so a key can be minted with exactly that module's access instead of
+#   blanket read/write. A legacy read/write key still satisfies them (see
+#   app/features/mcp/auth.py::has_scope).
+VALID_SCOPES = {
+    "read", "write", "trigger", "ingest",
+    "read:sponsors", "write:sponsors", "read:finance", "write:finance",
+}
 
 # Length of the human-facing prefix used for DB lookup, e.g. "dsec_live_a1b2c3d4".
 _PREFIX_RANDOM_LEN = 8

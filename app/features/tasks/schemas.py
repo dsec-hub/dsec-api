@@ -51,6 +51,7 @@ class TaskBase(BaseModel):
     """All fields optional — reused for create (title overridden) and update."""
 
     board_id: int | None = None
+    parent_task_id: int | None = None  # one-level subtasks
     title: str | None = None
     description: str | None = None
     status: str | None = None
@@ -84,6 +85,7 @@ class TaskOut(BaseModel):
 
     id: int
     board_id: int | None
+    parent_task_id: int | None
     title: str
     description: str | None
     status: str

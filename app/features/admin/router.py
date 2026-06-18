@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_basic_auth
 from app.core.apikeys import VALID_SCOPES, generate_key, require_api_key
 from app.core.net import client_ip
+from app.features.mcp.auth import has_scope
 from app.core.ratelimit import limiter
 from app.db import get_db
 from app.models import APIKey
@@ -121,8 +122,11 @@ def self_create_key(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"invalid scope(s): {sorted(invalid)}; allowed: {sorted(VALID_SCOPES)}",
         )
-    granted = set(caller.scopes or [])
-    escalated = requested - granted
+    # Scope-algebra-aware subset check: a broad caller (e.g. legacy "write") may
+    # mint a narrower per-module key (e.g. "write:sponsors"), but never the other
+    # way round. So even a leaked service key can't mint something more powerful.
+    granted = frozenset(caller.scopes or [])
+    escalated = {s for s in requested if not has_scope(granted, s)}
     if escalated:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

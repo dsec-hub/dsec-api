@@ -572,6 +572,10 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     board_id: Mapped[int | None] = mapped_column(ForeignKey("task_board.id"), index=True, nullable=True)
+    # Self-referential parent for one-level subtasks (NULL = top-level card).
+    parent_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("task.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     title: Mapped[str] = mapped_column(String(512))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), index=True, default="Backlog", server_default="Backlog")
@@ -607,6 +611,8 @@ class Meeting(Base):
     title: Mapped[str] = mapped_column(String(512))
     # Committee / Exec / Sponsorship / General / Other
     type: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    # Per-committee scoping for notes visibility (dsec-hub enforces who can see).
+    committee: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     meeting_date: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
     attendees: Mapped[list | None] = mapped_column(JSON, default=list)  # ["Name", ...]
@@ -641,6 +647,8 @@ class Document(Base):
     title: Mapped[str] = mapped_column(String(512))
     # Note / MeetingNotes / SponsorDoc / Deliverable / Policy / General
     type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    # Per-committee scoping for notes visibility (dsec-hub enforces who can see).
+    committee: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)  # markdown
     content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # future block editor
     # Draft / InReview / Final

@@ -65,6 +65,7 @@ def generate_meeting_notes(
         db.add(Document(
             title=f"Minutes — {meeting.title}", type="MeetingNotes",
             content=meeting.notes, status="Draft",
+            committee=meeting.committee,
             related_meeting_id=meeting.id, related_event_id=meeting.related_event_id,
             created_by="meeting-ai",
         ))

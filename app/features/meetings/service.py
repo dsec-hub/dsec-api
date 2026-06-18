@@ -21,6 +21,7 @@ def list_meetings(
     *,
     archived: bool = False,
     type: str | None = None,
+    committee: str | None = None,
     status: str | None = None,
     related_event_id: int | None = None,
     limit: int = 100,
@@ -31,6 +32,8 @@ def list_meetings(
         stmt = stmt.where(Meeting.archived.is_(False))
     if type:
         stmt = stmt.where(Meeting.type == type)
+    if committee:
+        stmt = stmt.where(Meeting.committee == committee)
     if status:
         stmt = stmt.where(Meeting.status == status)
     if related_event_id is not None:

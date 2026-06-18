@@ -15,21 +15,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Scopes in the order we always present them (least → most privileged).
-SCOPE_ORDER: tuple[str, ...] = ("read", "write", "trigger", "ingest")
+# Scopes in the order we always present them (least → most privileged). The
+# coarse read/write/trigger/ingest scopes are the historical, global ones; the
+# per-module read:<m>/write:<m> scopes isolate the "enforced" modules (Sponsors,
+# Finance) so a key can be granted exactly those without blanket access.
+SCOPE_ORDER: tuple[str, ...] = (
+    "read", "write", "trigger", "ingest",
+    "read:sponsors", "write:sponsors", "read:finance", "write:finance",
+)
 
 # Human-readable, assistant-facing description of each scope.
 SCOPE_SUMMARY: dict[str, str] = {
-    "read": "View workspace data — members, finances, events, projects, tasks, "
-            "meetings, documents, sponsors, partners and people.",
+    "read": "View workspace data — members, events, projects, tasks, meetings, "
+            "documents, partners and people (a legacy read key also covers the "
+            "isolated Sponsors and Finance modules).",
     "write": "Create and update workspace data — events (plus speaker, sponsor "
              "and partner line-ups), projects, task boards, meetings, documents, "
-             "sponsors (pipeline, packages, leads, contacts), partners and people.",
+             "partners and people (a legacy write key also covers the isolated "
+             "Sponsors and Finance modules).",
     "trigger": "Run AI features that spend tokens — currently generating meeting "
                "notes and action items from a transcript.",
     "ingest": "Import the weekly DUSA membership / P&L spreadsheets. Admin-only "
               "and used by the ingestion pipeline over REST — there are no MCP "
               "tools for it.",
+    "read:sponsors": "View only the sponsorship pipeline — sponsors, contacts, "
+                     "packages and inbound leads (the isolated Sponsors module).",
+    "write:sponsors": "Create and update the sponsorship pipeline — sponsors, "
+                      "contacts, packages and leads. Implies read:sponsors.",
+    "read:finance": "View only the club finances — the term P&L summary and "
+                    "ledger lines (the isolated Finance module).",
+    "write:finance": "Set event budgets and auto-applied grants. Implies "
+                     "read:finance.",
 }
 
 
@@ -39,7 +55,11 @@ class Tool:
     "meta" for tools any authenticated key may call (only `whoami`)."""
 
     name: str
-    scope: str  # "read" | "write" | "trigger" | "meta"
+    # "read" | "write" | "trigger" | "meta", or a per-module scope for the
+    # enforced modules: "read:sponsors" | "write:sponsors" | "read:finance" |
+    # "write:finance". A legacy "read"/"write" key still satisfies the module
+    # scopes (see app/features/mcp/auth.py::has_scope).
+    scope: str
     group: str
     summary: str
 
@@ -58,11 +78,11 @@ CATALOG: tuple[Tool, ...] = (
          "Member counts and the week-by-week membership trend."),
 
     # ---- Finance ---------------------------------------------------------- #
-    Tool("finance_summary", "read", "Finance",
+    Tool("finance_summary", "read:finance", "Finance",
          "Opening balance, income, expenses and closing balance for the term."),
-    Tool("list_transactions", "read", "Finance",
+    Tool("list_transactions", "read:finance", "Finance",
          "Profit-and-loss ledger lines."),
-    Tool("set_event_budget", "write", "Finance",
+    Tool("set_event_budget", "write:finance", "Finance",
          "Set an event's budget (auto-applies the standard grant)."),
 
     # ---- Events ----------------------------------------------------------- #
@@ -156,37 +176,37 @@ CATALOG: tuple[Tool, ...] = (
          "Update a document's title, content, status or assignee."),
 
     # ---- Sponsors --------------------------------------------------------- #
-    Tool("list_sponsors", "read", "Sponsors",
+    Tool("list_sponsors", "read:sponsors", "Sponsors",
          "List sponsorship leads / relationships in the pipeline."),
-    Tool("create_sponsor", "write", "Sponsors",
+    Tool("create_sponsor", "write:sponsors", "Sponsors",
          "Add a sponsorship lead."),
-    Tool("update_sponsor", "write", "Sponsors",
+    Tool("update_sponsor", "write:sponsors", "Sponsors",
          "Advance a sponsor through the pipeline / edit its details."),
 
     # ---- Sponsor contacts ------------------------------------------------- #
-    Tool("list_sponsor_contacts", "read", "Sponsor contacts",
+    Tool("list_sponsor_contacts", "read:sponsors", "Sponsor contacts",
          "List the people attached to a sponsor."),
-    Tool("add_sponsor_contact", "write", "Sponsor contacts",
+    Tool("add_sponsor_contact", "write:sponsors", "Sponsor contacts",
          "Attach a contact to a sponsor."),
-    Tool("update_sponsor_contact", "write", "Sponsor contacts",
+    Tool("update_sponsor_contact", "write:sponsors", "Sponsor contacts",
          "Update a sponsor contact's details."),
-    Tool("remove_sponsor_contact", "write", "Sponsor contacts",
+    Tool("remove_sponsor_contact", "write:sponsors", "Sponsor contacts",
          "Remove (soft-archive) a sponsor contact."),
 
     # ---- Sponsor packages ------------------------------------------------- #
-    Tool("list_sponsor_packages", "read", "Sponsor packages",
+    Tool("list_sponsor_packages", "read:sponsors", "Sponsor packages",
          "List the sponsorship tiers shown on the website."),
-    Tool("create_sponsor_package", "write", "Sponsor packages",
+    Tool("create_sponsor_package", "write:sponsors", "Sponsor packages",
          "Add a sponsorship package / tier."),
-    Tool("update_sponsor_package", "write", "Sponsor packages",
+    Tool("update_sponsor_package", "write:sponsors", "Sponsor packages",
          "Update a sponsorship package."),
-    Tool("delete_sponsor_package", "write", "Sponsor packages",
+    Tool("delete_sponsor_package", "write:sponsors", "Sponsor packages",
          "Permanently delete a sponsorship package. Confirm with the human first."),
 
     # ---- Sponsor leads (inbound) ------------------------------------------ #
-    Tool("list_sponsor_leads", "read", "Sponsor leads",
+    Tool("list_sponsor_leads", "read:sponsors", "Sponsor leads",
          "List inbound sponsorship enquiries from the website."),
-    Tool("update_sponsor_lead", "write", "Sponsor leads",
+    Tool("update_sponsor_lead", "write:sponsors", "Sponsor leads",
          "Move an inbound lead through the pipeline and add notes."),
 
     # ---- People ----------------------------------------------------------- #
@@ -211,19 +231,33 @@ def all_tool_names() -> set[str]:
 
 
 def tools_for_scopes(scopes: set[str]) -> list[Tool]:
-    """Tools a key holding `scopes` can actually call. `whoami` is always in."""
-    return [t for t in CATALOG if t.scope == "meta" or t.scope in scopes]
+    """Tools a key holding `scopes` can actually call. `whoami` is always in.
+
+    Uses the same scope algebra the server enforces (``auth.has_scope``) so a
+    legacy ``read``/``write`` key still lists the isolated Sponsors/Finance
+    tools, while a per-module key lists only its module's tools.
+    """
+    from app.features.mcp.auth import has_scope
+
+    sc = frozenset(scopes)
+    return [t for t in CATALOG if t.scope == "meta" or has_scope(sc, t.scope)]
 
 
 def tools_by_scope() -> dict[str, list[str]]:
     """`{scope: [tool names]}` for the machine-readable /info endpoint.
 
-    `whoami` needs no scope but is listed under `read` (a key's effective
-    minimum) to preserve the historical shape of that response.
+    Coarse buckets only: per-module read/write tools are folded into the `read`
+    and `write` buckets so the public inventory keeps its historical shape.
+    `whoami` is listed under `read` (a key's effective minimum).
     """
     out: dict[str, list[str]] = {"read": [], "write": [], "trigger": []}
     for t in CATALOG:
-        bucket = "read" if t.scope == "meta" else t.scope
+        if t.scope == "meta" or t.scope == "read" or t.scope.startswith("read:"):
+            bucket = "read"
+        elif t.scope == "write" or t.scope.startswith("write:"):
+            bucket = "write"
+        else:
+            bucket = t.scope
         if bucket in out:
             out[bucket].append(t.name)
     return out

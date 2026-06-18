@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from datetime import datetime, timezone
+from datetime import timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -249,7 +249,12 @@ async def authorize_post(request: Request, db: Session = Depends(get_db)):
     if user is None:
         return _consent_again(payload, client, "Invalid email or password.")
 
-    granted = sorted(set(scopes.split()) & users.allowed_scopes_for(db, user))
+    # Coarse grant = what the client requested ∩ what the user's role may grant.
+    coarse_granted = set(scopes.split()) & users.allowed_scopes_for(db, user)
+    # Expand into the module-aware scopes the MCP layer enforces: the enforced
+    # modules (Sponsors, Finance) become per-module scopes a role-without-them
+    # never receives; focus-only modules keep the legacy coarse read/write.
+    granted = service.scopes_for_grant(db, user, coarse_granted)
     if not granted:
         return _redirect_error(redirect_uri, "access_denied", state, "your DSEC account has no permissions to grant")
 
