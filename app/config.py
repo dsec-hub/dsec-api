@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_IP_PER_MIN: int = 120
     MAX_REQUEST_BYTES: int = 100_000
 
+    # --- Member verification cards (digital membership card in the portal) ---
+    # The member portal shows each verified member a "membership card" with a
+    # stable, unique code + QR. The code is HMAC-derived from the roster row id
+    # (deterministic → no storage, no migration) and the QR points at the public
+    # verify page. Blank reuses AGENT_SECRET (already required non-default in
+    # prod) so there is no NEW required secret; set it to rotate codes
+    # independently of the agent secret.
+    MEMBER_CODE_SECRET: str = ""
+    # Public base the QR encodes, e.g. https://app.dsec.club/verify/<code>. Door
+    # staff scan it to confirm the member (name + active status + face photo).
+    MEMBER_VERIFY_BASE_URL: str = "https://app.dsec.club/verify"
+
     # --- OAuth 2.1 (MCP authorization server) ---
     # The /mcp endpoint ALSO accepts OAuth 2.1 access tokens (alongside the
     # dsec_live_ API keys), so MCP clients whose "add connector" dialog only takes

@@ -40,12 +40,12 @@ from app.features.events.schemas import (
     EventUpdate,
 )
 from app.features.finance import service as finance_service
-from app.features.finance.schemas import EventBudgetOut, TransactionOut
+from app.features.finance.schemas import EventBudgetOut, ReportOut, TransactionOut
 from app.features.media import service as media_service
 from app.features.media.schemas import MediaOut
 from app.features.meetings import service as meetings_service
 from app.features.meetings.notes import generate_meeting_notes as _gen_notes
-from app.features.meetings.schemas import MeetingCreate, MeetingOut
+from app.features.meetings.schemas import MeetingCreate, MeetingOut, MeetingUpdate
 from app.features.members import service as members_service
 from app.features.members.schemas import MemberOut, MemberTrendPoint
 from app.features.partners import service as partners_service
@@ -76,7 +76,14 @@ from app.features.sponsors.schemas import (
     SponsorUpdate,
 )
 from app.features.tasks import service as tasks_service
-from app.features.tasks.schemas import BoardCreate, BoardOut, TaskCreate, TaskOut, TaskUpdate
+from app.features.tasks.schemas import (
+    BoardCreate,
+    BoardOut,
+    BoardUpdate,
+    TaskCreate,
+    TaskOut,
+    TaskUpdate,
+)
 
 from .auth import current_key, require_scope
 
@@ -195,6 +202,14 @@ def member_stats() -> dict:
         }
 
 
+@mcp.tool()
+def get_member(member_id: int) -> dict:
+    """Get one club member by id (from the weekly DUSA roster)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(MemberOut, _require(members_service.get_member(db, member_id), "member not found"))
+
+
 # --------------------------------------------------------------------------- #
 # finance
 # --------------------------------------------------------------------------- #
@@ -213,6 +228,16 @@ def list_transactions(kind: str | None = None, limit: int = 50) -> list[dict]:
     require_scope("read:finance")
     with SessionLocal() as db:
         return _dump_list(TransactionOut, finance_service.list_transactions(db, kind=kind, limit=limit))
+
+
+@mcp.tool()
+def list_finance_reports(limit: int = 20) -> list[dict]:
+    """List the imported P&L reports (one per weekly DUSA finance import), newest
+    first — each with its opening/closing balance, income/expense totals and line
+    count. The most recent (is_current=true) is what finance_summary reflects."""
+    require_scope("read:finance")
+    with SessionLocal() as db:
+        return _dump_list(ReportOut, finance_service.list_reports(db, limit=limit))
 
 
 @mcp.tool()
@@ -235,6 +260,14 @@ def list_events(status: str | None = None, type: str | None = None, limit: int =
     require_scope("read")
     with SessionLocal() as db:
         return _dump_list(EventOut, events_service.list_events(db, status=status, type=type, limit=limit))
+
+
+@mcp.tool()
+def get_event(event_id: int) -> dict:
+    """Get one event by id (full detail — including draft/published state)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(EventOut, _require(events_service.get_event(db, event_id), "event not found"))
 
 
 @mcp.tool()
@@ -522,6 +555,14 @@ def list_partners(search: str | None = None, limit: int = 50) -> list[dict]:
 
 
 @mcp.tool()
+def get_partner(partner_id: int) -> dict:
+    """Get one partner org/club by id."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(PartnerOut, _require(partners_service.get_partner(db, partner_id), "partner not found"))
+
+
+@mcp.tool()
 def create_partner(name: str, website: str | None = None, notes: str | None = None) -> dict:
     """Add a partner org/club. Link it to events with `link_event_partner`."""
     require_scope("write")
@@ -541,6 +582,16 @@ def update_partner(partner_id: int, name: str | None = None, website: str | None
                                           "partner not found"))
 
 
+@mcp.tool()
+def archive_partner(partner_id: int) -> dict:
+    """Soft-delete (archive) a partner org/club. It's hidden from the dashboard and
+    public site but never hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(PartnerOut, _require(partners_service.archive_partner(db, partner_id),
+                                          "partner not found"))
+
+
 # --------------------------------------------------------------------------- #
 # projects
 # --------------------------------------------------------------------------- #
@@ -552,6 +603,15 @@ def list_projects(status: str | None = None, is_public: bool | None = None, limi
     with SessionLocal() as db:
         return _dump_list(ProjectOut, projects_service.list_projects(
             db, status=status, is_public=is_public, limit=limit))
+
+
+@mcp.tool()
+def get_project(project_id: int) -> dict:
+    """Get one community project by id (full detail — including draft/published state)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(ProjectOut, _require(projects_service.get_project(db, project_id),
+                                          "project not found"))
 
 
 @mcp.tool()
@@ -599,6 +659,16 @@ def update_project(project_id: int, name: str | None = None, summary: str | None
                                           "project not found"))
 
 
+@mcp.tool()
+def archive_project(project_id: int) -> dict:
+    """Soft-delete (archive) a community project. It's hidden from the dashboard and
+    public site but never hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(ProjectOut, _require(projects_service.archive_project(db, project_id),
+                                          "project not found"))
+
+
 # --------------------------------------------------------------------------- #
 # task boards + tasks (Trello-style)
 # --------------------------------------------------------------------------- #
@@ -619,6 +689,27 @@ def create_board(name: str, description: str | None = None, committee: str | Non
     data = _coerce(BoardCreate, _data(name=name, description=description, committee=committee, columns=columns))
     with SessionLocal() as db:
         return _dump(BoardOut, tasks_service.create_board(db, data))
+
+
+@mcp.tool()
+def update_board(board_id: int, name: str | None = None, description: str | None = None,
+                 committee: str | None = None, columns: list[str] | None = None) -> dict:
+    """Update a task board (only the fields you pass change). `columns` replaces the
+    board's Trello-style list of column names."""
+    require_scope("write")
+    data = _coerce(BoardUpdate, _data(name=name, description=description, committee=committee,
+                                      columns=columns))
+    with SessionLocal() as db:
+        return _dump(BoardOut, _require(tasks_service.update_board(db, board_id, data), "board not found"))
+
+
+@mcp.tool()
+def archive_board(board_id: int) -> dict:
+    """Soft-delete (archive) a task board and hide it from the dashboard. The board
+    is never hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(BoardOut, _require(tasks_service.archive_board(db, board_id), "board not found"))
 
 
 @mcp.tool()
@@ -683,6 +774,23 @@ def move_task(task_id: int, status: str, position: int = 0) -> dict:
                                        "task not found"))
 
 
+@mcp.tool()
+def get_task(task_id: int) -> dict:
+    """Get one task card by id (full detail, including its cross-entity links)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(TaskOut, _require(tasks_service.get_task(db, task_id), "task not found"))
+
+
+@mcp.tool()
+def archive_task(task_id: int) -> dict:
+    """Soft-delete (archive) a task card. It's removed from its board but never
+    hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(TaskOut, _require(tasks_service.archive_task(db, task_id), "task not found"))
+
+
 # --------------------------------------------------------------------------- #
 # meetings (+ AI notes)
 # --------------------------------------------------------------------------- #
@@ -695,6 +803,16 @@ def list_meetings(type: str | None = None, committee: str | None = None,
     with SessionLocal() as db:
         return _dump_list(MeetingOut, meetings_service.list_meetings(
             db, type=type, committee=committee, status=status, limit=limit))
+
+
+@mcp.tool()
+def get_meeting(meeting_id: int) -> dict:
+    """Get one meeting by id, including its transcript, AI summary, notes and
+    action items."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(MeetingOut, _require(meetings_service.get_meeting(db, meeting_id),
+                                          "meeting not found"))
 
 
 @mcp.tool()
@@ -712,6 +830,37 @@ def create_meeting(title: str, type: str | None = None, committee: str | None = 
                                         related_event_id=related_event_id))
     with SessionLocal() as db:
         return _dump(MeetingOut, meetings_service.create_meeting(db, data))
+
+
+@mcp.tool()
+def update_meeting(meeting_id: int, title: str | None = None, type: str | None = None,
+                   committee: str | None = None, meeting_date: str | None = None,
+                   location: str | None = None, attendees: list[str] | None = None,
+                   transcript: str | None = None, summary: str | None = None,
+                   notes: str | None = None, action_items: list[str] | None = None,
+                   status: str | None = None, related_event_id: int | None = None) -> dict:
+    """Update a meeting (only the fields you pass change). Use this to edit a
+    transcript, or to hand-write `summary` / `notes` / `action_items` instead of
+    generating them with generate_meeting_notes."""
+    require_scope("write")
+    data = _coerce(MeetingUpdate, _data(title=title, type=type, committee=committee,
+                                        meeting_date=meeting_date, location=location,
+                                        attendees=attendees, transcript=transcript, summary=summary,
+                                        notes=notes, action_items=action_items, status=status,
+                                        related_event_id=related_event_id))
+    with SessionLocal() as db:
+        return _dump(MeetingOut, _require(meetings_service.update_meeting(db, meeting_id, data),
+                                          "meeting not found"))
+
+
+@mcp.tool()
+def archive_meeting(meeting_id: int) -> dict:
+    """Soft-delete (archive) a meeting. It's hidden from the dashboard but never
+    hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(MeetingOut, _require(meetings_service.archive_meeting(db, meeting_id),
+                                          "meeting not found"))
 
 
 @mcp.tool()
@@ -790,6 +939,16 @@ def update_document(document_id: int, title: str | None = None, content: str | N
                                            "document not found"))
 
 
+@mcp.tool()
+def archive_document(document_id: int) -> dict:
+    """Soft-delete (archive) a document. It's hidden from the dashboard but never
+    hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(DocumentOut, _require(documents_service.archive_document(db, document_id),
+                                           "document not found"))
+
+
 # --------------------------------------------------------------------------- #
 # sponsors (CRM pipeline)
 # --------------------------------------------------------------------------- #
@@ -800,6 +959,14 @@ def list_sponsors(stage: str | None = None, tier: str | None = None, limit: int 
     require_scope("read:sponsors")
     with SessionLocal() as db:
         return _dump_list(SponsorOut, sponsors_service.list_sponsors(db, stage=stage, tier=tier, limit=limit))
+
+
+@mcp.tool()
+def get_sponsor(sponsor_id: int) -> dict:
+    """Get one sponsor / pipeline relationship by id (full detail)."""
+    require_scope("read:sponsors")
+    with SessionLocal() as db:
+        return _dump(SponsorOut, _require(sponsors_service.get_sponsor(db, sponsor_id), "sponsor not found"))
 
 
 @mcp.tool()
@@ -845,6 +1012,17 @@ def update_sponsor(sponsor_id: int, organisation: str | None = None, stage: str 
                                         last_contact_date=last_contact_date, notes=notes))
     with SessionLocal() as db:
         return _dump(SponsorOut, _require(sponsors_service.update_sponsor(db, sponsor_id, data),
+                                          "sponsor not found"))
+
+
+@mcp.tool()
+def archive_sponsor(sponsor_id: int) -> dict:
+    """Soft-delete (archive) a sponsor / pipeline relationship. It's removed from
+    the dashboard and the public sponsor wall but never hard-deleted. Confirm with
+    the human first."""
+    require_scope("write:sponsors")
+    with SessionLocal() as db:
+        return _dump(SponsorOut, _require(sponsors_service.archive_sponsor(db, sponsor_id),
                                           "sponsor not found"))
 
 
@@ -909,6 +1087,15 @@ def list_sponsor_packages() -> list[dict]:
     require_scope("read:sponsors")
     with SessionLocal() as db:
         return _dump_list(SponsorPackageOut, packages_service.list_packages(db))
+
+
+@mcp.tool()
+def get_sponsor_package(package_id: int) -> dict:
+    """Get one sponsorship package/tier by id."""
+    require_scope("read:sponsors")
+    with SessionLocal() as db:
+        return _dump(SponsorPackageOut, _require(packages_service.get_package(db, package_id),
+                                                 "package not found"))
 
 
 @mcp.tool()
@@ -985,6 +1172,14 @@ def list_people(type: str | None = None, committee: str | None = None,
 
 
 @mcp.tool()
+def get_person(person_id: int) -> dict:
+    """Get one person by id (committee member or external contact)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(PersonOut, _require(people_service.get_person(db, person_id), "person not found"))
+
+
+@mcp.tool()
 def create_person(name: str, type: str | None = None, committee: str | None = None,
                   role_title: str | None = None, email: str | None = None,
                   status: str | None = None, notes: str | None = None, bio: str | None = None,
@@ -1017,6 +1212,16 @@ def update_person(person_id: int, name: str | None = None, type: str | None = No
                                        display_order=display_order))
     with SessionLocal() as db:
         return _dump(PersonOut, _require(people_service.update_person(db, person_id, data),
+                                         "person not found"))
+
+
+@mcp.tool()
+def archive_person(person_id: int) -> dict:
+    """Soft-delete (archive) a person. They're removed from the dashboard and the
+    public team grid but never hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(PersonOut, _require(people_service.archive_person(db, person_id),
                                          "person not found"))
 
 

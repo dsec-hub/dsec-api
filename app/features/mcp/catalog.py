@@ -74,6 +74,8 @@ CATALOG: tuple[Tool, ...] = (
     # ---- Members ---------------------------------------------------------- #
     Tool("list_members", "read", "Members",
          "List club members (the paid roster from the weekly DUSA import)."),
+    Tool("get_member", "read", "Members",
+         "Get one club member by id."),
     Tool("member_stats", "read", "Members",
          "Member counts and the week-by-week membership trend."),
 
@@ -82,12 +84,16 @@ CATALOG: tuple[Tool, ...] = (
          "Opening balance, income, expenses and closing balance for the term."),
     Tool("list_transactions", "read:finance", "Finance",
          "Profit-and-loss ledger lines."),
+    Tool("list_finance_reports", "read:finance", "Finance",
+         "List the imported P&L reports (one per weekly finance import), newest first."),
     Tool("set_event_budget", "write:finance", "Finance",
          "Set an event's budget (auto-applies the standard grant)."),
 
     # ---- Events ----------------------------------------------------------- #
     Tool("list_events", "read", "Events",
          "List club events (drafts and published)."),
+    Tool("get_event", "read", "Events",
+         "Get one event by id (full detail)."),
     Tool("create_event", "write", "Events",
          "Create an event. It stays a private draft until is_public=true."),
     Tool("update_event", "write", "Events",
@@ -130,38 +136,60 @@ CATALOG: tuple[Tool, ...] = (
     # ---- Partners --------------------------------------------------------- #
     Tool("list_partners", "read", "Partners",
          "List collaborator clubs / partner organisations."),
+    Tool("get_partner", "read", "Partners",
+         "Get one partner org / club by id."),
     Tool("create_partner", "write", "Partners",
          "Add a partner org / club."),
     Tool("update_partner", "write", "Partners",
          "Update a partner's details."),
+    Tool("archive_partner", "write", "Partners",
+         "Soft-delete (archive) a partner org. Confirm with the human first."),
 
     # ---- Projects --------------------------------------------------------- #
     Tool("list_projects", "read", "Projects",
          "List community projects."),
+    Tool("get_project", "read", "Projects",
+         "Get one community project by id (full detail)."),
     Tool("create_project", "write", "Projects",
          "Create a project. It stays a draft until is_public=true."),
     Tool("update_project", "write", "Projects",
          "Update fields on a project."),
+    Tool("archive_project", "write", "Projects",
+         "Soft-delete (archive) a project. Confirm with the human first."),
 
     # ---- Tasks ------------------------------------------------------------ #
     Tool("list_boards", "read", "Tasks",
          "List task boards and their columns."),
     Tool("create_board", "write", "Tasks",
          "Create a task board."),
+    Tool("update_board", "write", "Tasks",
+         "Update a task board's name, description, committee or columns."),
+    Tool("archive_board", "write", "Tasks",
+         "Soft-delete (archive) a task board. Confirm with the human first."),
     Tool("list_tasks", "read", "Tasks",
          "List task cards (filterable by board, column, assignee, …)."),
+    Tool("get_task", "read", "Tasks",
+         "Get one task card by id (full detail)."),
     Tool("create_task", "write", "Tasks",
          "Create a task card."),
     Tool("update_task", "write", "Tasks",
          "Update a task's fields and cross-entity links."),
     Tool("move_task", "write", "Tasks",
          "Move a task to a column and position."),
+    Tool("archive_task", "write", "Tasks",
+         "Soft-delete (archive) a task card. Confirm with the human first."),
 
     # ---- Meetings --------------------------------------------------------- #
     Tool("list_meetings", "read", "Meetings",
          "List meetings."),
+    Tool("get_meeting", "read", "Meetings",
+         "Get one meeting by id (transcript, notes, action items)."),
     Tool("create_meeting", "write", "Meetings",
          "Create a meeting record."),
+    Tool("update_meeting", "write", "Meetings",
+         "Update a meeting (edit transcript, or hand-write notes/action items)."),
+    Tool("archive_meeting", "write", "Meetings",
+         "Soft-delete (archive) a meeting. Confirm with the human first."),
     Tool("generate_meeting_notes", "trigger", "Meetings",
          "AI-summarise a transcript into notes and action items (spends tokens)."),
 
@@ -174,14 +202,20 @@ CATALOG: tuple[Tool, ...] = (
          "Create a document."),
     Tool("update_document", "write", "Documents",
          "Update a document's title, content, status or assignee."),
+    Tool("archive_document", "write", "Documents",
+         "Soft-delete (archive) a document. Confirm with the human first."),
 
     # ---- Sponsors --------------------------------------------------------- #
     Tool("list_sponsors", "read:sponsors", "Sponsors",
          "List sponsorship leads / relationships in the pipeline."),
+    Tool("get_sponsor", "read:sponsors", "Sponsors",
+         "Get one sponsor / pipeline relationship by id."),
     Tool("create_sponsor", "write:sponsors", "Sponsors",
          "Add a sponsorship lead."),
     Tool("update_sponsor", "write:sponsors", "Sponsors",
          "Advance a sponsor through the pipeline / edit its details."),
+    Tool("archive_sponsor", "write:sponsors", "Sponsors",
+         "Soft-delete (archive) a sponsor. Confirm with the human first."),
 
     # ---- Sponsor contacts ------------------------------------------------- #
     Tool("list_sponsor_contacts", "read:sponsors", "Sponsor contacts",
@@ -196,6 +230,8 @@ CATALOG: tuple[Tool, ...] = (
     # ---- Sponsor packages ------------------------------------------------- #
     Tool("list_sponsor_packages", "read:sponsors", "Sponsor packages",
          "List the sponsorship tiers shown on the website."),
+    Tool("get_sponsor_package", "read:sponsors", "Sponsor packages",
+         "Get one sponsorship package / tier by id."),
     Tool("create_sponsor_package", "write:sponsors", "Sponsor packages",
          "Add a sponsorship package / tier."),
     Tool("update_sponsor_package", "write:sponsors", "Sponsor packages",
@@ -212,10 +248,14 @@ CATALOG: tuple[Tool, ...] = (
     # ---- People ----------------------------------------------------------- #
     Tool("list_people", "read", "People",
          "List people (exec, committee, external contacts) — use this to resolve assignees."),
+    Tool("get_person", "read", "People",
+         "Get one person by id (committee member or external contact)."),
     Tool("create_person", "write", "People",
          "Add a person (committee member or external contact)."),
     Tool("update_person", "write", "People",
          "Update a person's details."),
+    Tool("archive_person", "write", "People",
+         "Soft-delete (archive) a person. Confirm with the human first."),
 
     # ---- Media & attachments ---------------------------------------------- #
     Tool("list_media", "read", "Media & attachments",

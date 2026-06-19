@@ -6,10 +6,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-ENTITY_TYPES = {"event", "project", "sponsor", "speaker", "person", "partner"}
+# portal_account — a member-portal login's verification face photo (entity_id is
+# the portal_account.id; the portal owns that table and stores the returned url).
+ENTITY_TYPES = {"event", "project", "sponsor", "speaker", "person", "partner", "portal_account"}
 # image/poster/banner — gallery roles for events & projects. logo — a sponsor's
-# or partner's brand mark (kept transparent). photo — a speaker's headshot or a
-# person's (roster member's) profile picture.
+# or partner's brand mark (kept transparent). photo — a speaker's headshot, a
+# person's (roster member's) profile picture, or a portal member's face photo.
 ROLES = {"image", "poster", "banner", "logo", "photo"}
 
 

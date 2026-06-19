@@ -36,6 +36,14 @@ def get_member(db: Session, member_id: int) -> Member | None:
     return db.get(Member, member_id)
 
 
+def all_current_members(db: Session) -> list[Member]:
+    """Every CURRENT roster row — used to resolve a verification code to a member
+    (we recompute each one's code and compare). The roster is small; no limit."""
+    return list(
+        db.execute(select(Member).where(Member.is_current.is_(True))).scalars().all()
+    )
+
+
 def member_counts(db: Session) -> dict:
     current = db.execute(
         select(func.count()).select_from(Member).where(Member.is_current.is_(True))
