@@ -34,6 +34,9 @@ class EventBase(BaseModel):
     grant_aud: float | None = None
     # Draft (False) vs published (True). Published events show on the public site.
     is_public: bool | None = None
+    # Additional owners beyond `event_lead_id` (the primary lead). Full replace on
+    # PATCH; omit to leave unchanged, [] to clear. The primary is never duplicated.
+    co_owner_ids: list[int] | None = None
 
 
 class EventCreate(EventBase):
@@ -74,6 +77,7 @@ class EventOut(BaseModel):
     partner_org: str | None
     related_sponsor_id: int | None
     is_public: bool
+    co_owner_ids: list[int] = []
     # Post-event review form (Tally) — set by the reviews feature, read-only here.
     review_form_id: str | None
     review_form_url: str | None

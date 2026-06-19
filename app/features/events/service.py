@@ -13,7 +13,14 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Event
+from app.core.owners import attach_owner_ids, set_owners
+from app.models import Event, EventOwner
+
+
+def _attach_owners(db: Session, rows):
+    """Populate `.co_owner_ids` on an event (or list) for the Out schema."""
+    attach_owner_ids(db, EventOwner, EventOwner.event_id, rows)
+    return rows
 
 
 def list_events(
@@ -46,30 +53,38 @@ def list_events(
         .limit(min(limit, 200))
         .offset(offset)
     )
-    return list(db.execute(stmt).scalars().all())
+    return _attach_owners(db, list(db.execute(stmt).scalars().all()))
 
 
 def get_event(db: Session, event_id: int) -> Event | None:
-    return db.get(Event, event_id)
+    return _attach_owners(db, db.get(Event, event_id))
 
 
 def create_event(db: Session, data: dict) -> Event:
+    data = dict(data)
+    co_owner_ids = data.pop("co_owner_ids", None)
     event = Event(**data)
     db.add(event)
     db.commit()
     db.refresh(event)
-    return event
+    if co_owner_ids is not None:
+        set_owners(db, EventOwner, EventOwner.event_id, event.id, co_owner_ids, exclude=event.event_lead_id)
+    return _attach_owners(db, event)
 
 
 def update_event(db: Session, event_id: int, data: dict) -> Event | None:
     event = db.get(Event, event_id)
     if event is None:
         return None
+    data = dict(data)
+    co_owner_ids = data.pop("co_owner_ids", None)
     for key, value in data.items():
         setattr(event, key, value)
     db.commit()
     db.refresh(event)
-    return event
+    if co_owner_ids is not None:
+        set_owners(db, EventOwner, EventOwner.event_id, event.id, co_owner_ids, exclude=event.event_lead_id)
+    return _attach_owners(db, event)
 
 
 def archive_event(db: Session, event_id: int) -> Event | None:
@@ -79,4 +94,4 @@ def archive_event(db: Session, event_id: int) -> Event | None:
     event.archived = True
     db.commit()
     db.refresh(event)
-    return event
+    return _attach_owners(db, event)

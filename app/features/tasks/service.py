@@ -16,11 +16,19 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Task, TaskBoard
+from app.core.notify import notify_task_assigned
+from app.core.owners import attach_owner_ids, set_owners
+from app.models import Task, TaskBoard, TaskOwner
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _attach_owners(db: Session, rows):
+    """Populate `.co_owner_ids` on a task (or list of tasks) for the Out schema."""
+    attach_owner_ids(db, TaskOwner, TaskOwner.task_id, rows)
+    return rows
 
 
 # -----------------------------------------------------------------------------
@@ -119,15 +127,17 @@ def list_tasks(
         .limit(min(limit, 500))
         .offset(offset)
     )
-    return list(db.execute(stmt).scalars().all())
+    rows = list(db.execute(stmt).scalars().all())
+    return _attach_owners(db, rows)
 
 
 def get_task(db: Session, task_id: int) -> Task | None:
-    return db.get(Task, task_id)
+    return _attach_owners(db, db.get(Task, task_id))
 
 
 def create_task(db: Session, data: dict) -> Task:
     data = dict(data)
+    co_owner_ids = data.pop("co_owner_ids", None)
     if data.get("position") is None:
         status = data.get("status") or "Backlog"
         max_pos = db.execute(
@@ -141,18 +151,39 @@ def create_task(db: Session, data: dict) -> Task:
     db.add(task)
     db.commit()
     db.refresh(task)
-    return task
+    if co_owner_ids is not None:
+        set_owners(db, TaskOwner, TaskOwner.task_id, task.id, co_owner_ids, exclude=task.assignee_id)
+    # A brand-new task that already has an assignee IS an assignment — hand off to
+    # dsec-hub so the assignee gets notified (the dashboard's own on-assign hook
+    # can't see REST/MCP writes). Best-effort; never blocks or fails the create.
+    if task.assignee_id is not None:
+        notify_task_assigned(task_id=task.id, assignee_person_id=task.assignee_id)
+    return _attach_owners(db, task)
 
 
 def update_task(db: Session, task_id: int, data: dict) -> Task | None:
     task = db.get(Task, task_id)
     if task is None:
         return None
+    data = dict(data)
+    co_owner_ids = data.pop("co_owner_ids", None)
+    prev_assignee_id = task.assignee_id
     for key, value in data.items():
         setattr(task, key, value)
     db.commit()
     db.refresh(task)
-    return task
+    if co_owner_ids is not None:
+        set_owners(db, TaskOwner, TaskOwner.task_id, task.id, co_owner_ids, exclude=task.assignee_id)
+    # Notify only on a real (re)assignment to a person — the patch touched
+    # assignee_id and landed on a non-null value different from before. Clearing
+    # the assignee or re-saving the same one stays silent.
+    if (
+        "assignee_id" in data
+        and task.assignee_id is not None
+        and task.assignee_id != prev_assignee_id
+    ):
+        notify_task_assigned(task_id=task.id, assignee_person_id=task.assignee_id)
+    return _attach_owners(db, task)
 
 
 def archive_task(db: Session, task_id: int) -> Task | None:
@@ -162,7 +193,7 @@ def archive_task(db: Session, task_id: int) -> Task | None:
     task.archived = True
     db.commit()
     db.refresh(task)
-    return task
+    return _attach_owners(db, task)
 
 
 def move_task(db: Session, task_id: int, *, status: str, position: int) -> Task | None:
@@ -177,4 +208,4 @@ def move_task(db: Session, task_id: int, *, status: str, position: int) -> Task 
         task.completed_at = None
     db.commit()
     db.refresh(task)
-    return task
+    return _attach_owners(db, task)

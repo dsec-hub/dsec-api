@@ -133,6 +133,19 @@ class Settings(BaseSettings):
     # --- Vercel Cron auth (daily reconciliation sync) ---
     CRON_SECRET: str = ""
 
+    # --- Task-assignment notifications handed off to dsec-hub ---
+    # dsec-api has NO notification delivery of its own — email/Telegram/Discord
+    # and every per-user channel pref live in the committee dashboard (dsec-hub).
+    # A task assigned via the REST API or the MCP server never touches hub's
+    # server actions, so the dashboard's on-assign hook can't fire for it. To
+    # close that gap we POST a small, best-effort event to hub's internal
+    # endpoint, which runs the SAME on-assign notifier the dashboard uses (same
+    # prefs + dedupe). One-way fire-and-forget: a slow/down hub never blocks or
+    # fails the task write. Blank URL/secret disables the hand-off (silent no-op),
+    # which is the right default for local dev with no hub running.
+    HUB_NOTIFY_URL: str = ""  # e.g. https://hub.dsec.club/api/internal/notify-assignment
+    HUB_NOTIFY_SECRET: str = ""  # must equal HUB_NOTIFY_SECRET on the dsec-hub deploy
+
     # --- v2 webhook secrets (reserved) ---
     DISCORD_WEBHOOK_SECRET: str = ""
     CALCOM_WEBHOOK_SECRET: str = ""

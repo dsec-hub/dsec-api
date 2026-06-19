@@ -22,6 +22,7 @@ class DocumentBase(BaseModel):
     related_sponsor_id: int | None = None
     related_project_id: int | None = None
     related_meeting_id: int | None = None
+    related_task_id: int | None = None
     created_by: str | None = None
 
 
@@ -49,6 +50,7 @@ class DocumentOut(BaseModel):
     related_sponsor_id: int | None
     related_project_id: int | None
     related_meeting_id: int | None
+    related_task_id: int | None
     created_by: str | None
     archived: bool
     created_at: datetime

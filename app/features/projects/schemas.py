@@ -27,6 +27,9 @@ class ProjectBase(BaseModel):
     is_public: bool | None = None
     related_event_id: int | None = None
     notes: str | None = None
+    # Additional owners beyond `lead_id` (the primary lead). Full replace on PATCH;
+    # omit to leave unchanged, [] to clear. The primary is never duplicated here.
+    co_owner_ids: list[int] | None = None
 
 
 class ProjectCreate(ProjectBase):
@@ -58,6 +61,7 @@ class ProjectOut(BaseModel):
     is_public: bool
     related_event_id: int | None
     notes: str | None
+    co_owner_ids: list[int] = []
     archived: bool
     created_at: datetime
     updated_at: datetime

@@ -29,6 +29,7 @@ def list_documents(
     related_sponsor_id: int | None = None,
     related_project_id: int | None = None,
     related_meeting_id: int | None = None,
+    related_task_id: int | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Document]:
@@ -53,6 +54,8 @@ def list_documents(
         stmt = stmt.where(Document.related_project_id == related_project_id)
     if related_meeting_id is not None:
         stmt = stmt.where(Document.related_meeting_id == related_meeting_id)
+    if related_task_id is not None:
+        stmt = stmt.where(Document.related_task_id == related_task_id)
     stmt = stmt.order_by(Document.updated_at.desc()).limit(min(limit, 200)).offset(offset)
     return list(db.execute(stmt).scalars().all())
 

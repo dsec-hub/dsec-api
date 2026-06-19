@@ -15,7 +15,14 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Project
+from app.core.owners import attach_owner_ids, set_owners
+from app.models import Project, ProjectOwner
+
+
+def _attach_owners(db: Session, rows):
+    """Populate `.co_owner_ids` on a project (or list) for the Out schema."""
+    attach_owner_ids(db, ProjectOwner, ProjectOwner.project_id, rows)
+    return rows
 
 
 def _slugify(name: str) -> str:
@@ -55,33 +62,40 @@ def list_projects(
         .limit(min(limit, 200))
         .offset(offset)
     )
-    return list(db.execute(stmt).scalars().all())
+    return _attach_owners(db, list(db.execute(stmt).scalars().all()))
 
 
 def get_project(db: Session, project_id: int) -> Project | None:
-    return db.get(Project, project_id)
+    return _attach_owners(db, db.get(Project, project_id))
 
 
 def create_project(db: Session, data: dict) -> Project:
     data = dict(data)
+    co_owner_ids = data.pop("co_owner_ids", None)
     if not data.get("slug"):
         data["slug"] = _unique_slug(db, _slugify(data.get("name", "")))
     proj = Project(**data)
     db.add(proj)
     db.commit()
     db.refresh(proj)
-    return proj
+    if co_owner_ids is not None:
+        set_owners(db, ProjectOwner, ProjectOwner.project_id, proj.id, co_owner_ids, exclude=proj.lead_id)
+    return _attach_owners(db, proj)
 
 
 def update_project(db: Session, project_id: int, data: dict) -> Project | None:
     proj = db.get(Project, project_id)
     if proj is None:
         return None
+    data = dict(data)
+    co_owner_ids = data.pop("co_owner_ids", None)
     for key, value in data.items():
         setattr(proj, key, value)
     db.commit()
     db.refresh(proj)
-    return proj
+    if co_owner_ids is not None:
+        set_owners(db, ProjectOwner, ProjectOwner.project_id, proj.id, co_owner_ids, exclude=proj.lead_id)
+    return _attach_owners(db, proj)
 
 
 def archive_project(db: Session, project_id: int) -> Project | None:
@@ -91,4 +105,4 @@ def archive_project(db: Session, project_id: int) -> Project | None:
     proj.archived = True
     db.commit()
     db.refresh(proj)
-    return proj
+    return _attach_owners(db, proj)

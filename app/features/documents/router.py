@@ -31,6 +31,7 @@ def list_documents(
     related_sponsor_id: int | None = None,
     related_project_id: int | None = None,
     related_meeting_id: int | None = None,
+    related_task_id: int | None = None,
     include_archived: bool = False,
     limit: int = Query(100, le=200),
     offset: int = 0,
@@ -43,6 +44,7 @@ def list_documents(
         assignee_id=assignee_id, parent_id=parent_id, top_level=top_level,
         related_event_id=related_event_id, related_sponsor_id=related_sponsor_id,
         related_project_id=related_project_id, related_meeting_id=related_meeting_id,
+        related_task_id=related_task_id,
         limit=limit, offset=offset,
     )
     return [DocumentOut.model_validate(r) for r in rows]

@@ -659,6 +659,7 @@ class Document(Base):
     related_sponsor_id: Mapped[int | None] = mapped_column(ForeignKey("sponsors.id"), index=True, nullable=True)
     related_project_id: Mapped[int | None] = mapped_column(ForeignKey("project.id"), index=True, nullable=True)
     related_meeting_id: Mapped[int | None] = mapped_column(ForeignKey("meeting.id"), index=True, nullable=True)
+    related_task_id: Mapped[int | None] = mapped_column(ForeignKey("task.id"), index=True, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -1068,6 +1069,82 @@ class EventConnection(Base):
 
     __table_args__ = (
         UniqueConstraint("event_a_id", "event_b_id", name="uq_event_connection"),
+    )
+
+
+# =============================================================================
+# Co-owners (multi-assignee / multi-lead)
+# =============================================================================
+#
+# Tasks, events and projects each keep ONE primary owner on their own row
+# (`task.assignee_id`, `events.event_lead_id`, `project.lead_id`). These join
+# tables hold the *additional* owners, so an entity can be co-owned by several
+# people. The primary is unchanged, so every existing query (My Work,
+# group-by-assignee, on-assign notifications, the public event-lead) keeps
+# working; co-owners are purely additive. Hard-deleted on unlink; one row per
+# (entity, person); cascade away when either side is deleted.
+
+
+class TaskOwner(Base):
+    """An additional owner of a task, beyond the primary `task.assignee_id`."""
+
+    __tablename__ = "task_owner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("task.id", ondelete="CASCADE"), index=True
+    )
+    person_id: Mapped[int] = mapped_column(
+        ForeignKey("people.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "person_id", name="uq_task_owner"),
+    )
+
+
+class EventOwner(Base):
+    """An additional owner of an event, beyond the primary `events.event_lead_id`."""
+
+    __tablename__ = "event_owner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), index=True
+    )
+    person_id: Mapped[int] = mapped_column(
+        ForeignKey("people.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "person_id", name="uq_event_owner"),
+    )
+
+
+class ProjectOwner(Base):
+    """An additional owner of a project, beyond the primary `project.lead_id`."""
+
+    __tablename__ = "project_owner"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("project.id", ondelete="CASCADE"), index=True
+    )
+    person_id: Mapped[int] = mapped_column(
+        ForeignKey("people.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "person_id", name="uq_project_owner"),
     )
 
 

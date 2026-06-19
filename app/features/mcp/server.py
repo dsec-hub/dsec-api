@@ -282,12 +282,13 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
                  dusa_required: bool | None = None, dusa_deadline: str | None = None,
                  dusa_submission_status: str | None = None, support_types: list[str] | None = None,
                  partner_org: str | None = None, related_sponsor_id: int | None = None,
-                 is_public: bool | None = None) -> dict:
+                 is_public: bool | None = None, co_owner_ids: list[int] | None = None) -> dict:
     """Create an event. Dates are ISO YYYY-MM-DD. `ticket_tiers` is tiered pricing:
     a list of {"label": str, "price": number | null} (price 0 = free, null = unset).
     `description` is free-form Markdown shown on the public website. New events are
     drafts — set is_public=true to publish to the public website. `support_types`
-    + `partner_org` capture an in-kind/partner-run collaboration (no money)."""
+    + `partner_org` capture an in-kind/partner-run collaboration (no money).
+    `event_lead_id` is the primary lead; `co_owner_ids` adds extra leads/owners."""
     require_scope("write")
     data = _coerce(EventCreate, _data(name=name, type=type, status=status, start_date=start_date,
                                       end_date=end_date, trimester=trimester, format=format,
@@ -299,7 +300,8 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
                                       dusa_required=dusa_required, dusa_deadline=dusa_deadline,
                                       dusa_submission_status=dusa_submission_status,
                                       support_types=support_types, partner_org=partner_org,
-                                      related_sponsor_id=related_sponsor_id, is_public=is_public))
+                                      related_sponsor_id=related_sponsor_id, is_public=is_public,
+                                      co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(EventOut, events_service.create_event(db, data))
 
@@ -316,11 +318,13 @@ def update_event(event_id: int, name: str | None = None, type: str | None = None
                  dusa_required: bool | None = None, dusa_deadline: str | None = None,
                  dusa_submission_status: str | None = None, support_types: list[str] | None = None,
                  partner_org: str | None = None, related_sponsor_id: int | None = None,
-                 is_public: bool | None = None) -> dict:
+                 is_public: bool | None = None, co_owner_ids: list[int] | None = None) -> dict:
     """Update an event (only the fields you pass change). `ticket_tiers` is tiered
     pricing: a list of {"label": str, "price": number | null} (price 0 = free).
     `description` is free-form Markdown shown on the public website. Set
-    is_public=true to publish (or false to unpublish/return to draft)."""
+    is_public=true to publish (or false to unpublish/return to draft).
+    `co_owner_ids` replaces the extra leads/owners beyond the primary
+    `event_lead_id` (pass [] to clear them; omit to leave unchanged)."""
     require_scope("write")
     data = _coerce(EventUpdate, _data(name=name, type=type, status=status, start_date=start_date,
                                       end_date=end_date, trimester=trimester, format=format,
@@ -332,7 +336,8 @@ def update_event(event_id: int, name: str | None = None, type: str | None = None
                                       dusa_required=dusa_required, dusa_deadline=dusa_deadline,
                                       dusa_submission_status=dusa_submission_status,
                                       support_types=support_types, partner_org=partner_org,
-                                      related_sponsor_id=related_sponsor_id, is_public=is_public))
+                                      related_sponsor_id=related_sponsor_id, is_public=is_public,
+                                      co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(EventOut, _require(events_service.update_event(db, event_id, data), "event not found"))
 
@@ -621,17 +626,20 @@ def create_project(name: str, summary: str | None = None, description: str | Non
                    repo_url: str | None = None, demo_url: str | None = None,
                    start_date: str | None = None, end_date: str | None = None,
                    related_event_id: int | None = None, notes: str | None = None,
-                   is_public: bool | None = None, featured: bool | None = None) -> dict:
+                   is_public: bool | None = None, featured: bool | None = None,
+                   co_owner_ids: list[int] | None = None) -> dict:
     """Create a community project. Set is_public=true to show it on the website
     (it's a draft until then); featured=true pins it. `tech_tags` is a list of
-    strings; `notes` is internal-only (never shown publicly)."""
+    strings; `notes` is internal-only (never shown publicly). `lead_id` is the
+    primary lead; `co_owner_ids` adds extra owners (multi-lead)."""
     require_scope("write")
     data = _coerce(ProjectCreate, _data(name=name, summary=summary, description=description,
                                         status=status, category=category, tech_tags=tech_tags,
                                         lead_id=lead_id, repo_url=repo_url, demo_url=demo_url,
                                         start_date=start_date, end_date=end_date,
                                         related_event_id=related_event_id, notes=notes,
-                                        is_public=is_public, featured=featured))
+                                        is_public=is_public, featured=featured,
+                                        co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(ProjectOut, projects_service.create_project(db, data))
 
@@ -644,16 +652,19 @@ def update_project(project_id: int, name: str | None = None, summary: str | None
                    start_date: str | None = None, end_date: str | None = None,
                    notes: str | None = None, is_public: bool | None = None,
                    featured: bool | None = None, repo_url: str | None = None,
-                   demo_url: str | None = None) -> dict:
+                   demo_url: str | None = None, co_owner_ids: list[int] | None = None) -> dict:
     """Update a community project (only the fields you pass change). Set
-    is_public=true/false to publish/unpublish."""
+    is_public=true/false to publish/unpublish. `co_owner_ids` replaces the extra
+    owners beyond the primary `lead_id` (pass [] to clear them; omit to leave
+    unchanged)."""
     require_scope("write")
     data = _coerce(ProjectUpdate, _data(name=name, summary=summary, description=description,
                                         status=status, category=category, tech_tags=tech_tags,
                                         lead_id=lead_id, related_event_id=related_event_id,
                                         start_date=start_date, end_date=end_date, notes=notes,
                                         is_public=is_public, featured=featured,
-                                        repo_url=repo_url, demo_url=demo_url))
+                                        repo_url=repo_url, demo_url=demo_url,
+                                        co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(ProjectOut, _require(projects_service.update_project(db, project_id, data),
                                           "project not found"))
@@ -729,15 +740,18 @@ def create_task(title: str, board_id: int | None = None, parent_task_id: int | N
                 description: str | None = None, priority: str | None = None,
                 assignee_id: int | None = None, committee: str | None = None,
                 due_date: str | None = None, related_event_id: int | None = None,
-                related_project_id: int | None = None, related_sponsor_id: int | None = None) -> dict:
+                related_project_id: int | None = None, related_sponsor_id: int | None = None,
+                co_owner_ids: list[int] | None = None) -> dict:
     """Create a task card. status is the board column (defaults to Backlog).
-    Pass parent_task_id to make it a subtask (one level only)."""
+    Pass parent_task_id to make it a subtask (one level only). `assignee_id` is
+    the primary owner; `co_owner_ids` adds extra owners (multi-assignee)."""
     require_scope("write")
     data = _coerce(TaskCreate, _data(title=title, board_id=board_id, parent_task_id=parent_task_id,
                                      status=status,
                                      description=description, priority=priority, assignee_id=assignee_id,
                                      committee=committee, due_date=due_date, related_event_id=related_event_id,
-                                     related_project_id=related_project_id, related_sponsor_id=related_sponsor_id))
+                                     related_project_id=related_project_id, related_sponsor_id=related_sponsor_id,
+                                     co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(TaskOut, tasks_service.create_task(db, data))
 
@@ -749,18 +763,19 @@ def update_task(task_id: int, title: str | None = None, description: str | None 
                 committee: str | None = None, board_id: int | None = None,
                 parent_task_id: int | None = None,
                 related_event_id: int | None = None, related_project_id: int | None = None,
-                related_sponsor_id: int | None = None) -> dict:
+                related_sponsor_id: int | None = None, co_owner_ids: list[int] | None = None) -> dict:
     """Update a task card's fields, including its cross-entity links
     (related_event_id / related_project_id / related_sponsor_id), which board
     it lives on, and its parent (parent_task_id). Use move_task to change
-    column (status)/order."""
+    column (status)/order. `co_owner_ids` replaces the extra owners beyond the
+    primary `assignee_id` (pass [] to clear them; omit to leave unchanged)."""
     require_scope("write")
     data = _coerce(TaskUpdate, _data(title=title, description=description, priority=priority,
                                      assignee_id=assignee_id, start_date=start_date, due_date=due_date,
                                      committee=committee, board_id=board_id, parent_task_id=parent_task_id,
                                      related_event_id=related_event_id,
                                      related_project_id=related_project_id,
-                                     related_sponsor_id=related_sponsor_id))
+                                     related_sponsor_id=related_sponsor_id, co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(TaskOut, _require(tasks_service.update_task(db, task_id, data), "task not found"))
 
@@ -891,12 +906,16 @@ def generate_meeting_notes(meeting_id: int, transcript: str | None = None) -> di
 
 @mcp.tool()
 def list_documents(type: str | None = None, status: str | None = None,
-                   assignee_id: int | None = None, top_level: bool = False, limit: int = 50) -> list[dict]:
-    """List documents. type is Note|MeetingNotes|SponsorDoc|Deliverable|Policy|General."""
+                   assignee_id: int | None = None, related_task_id: int | None = None,
+                   top_level: bool = False, limit: int = 50) -> list[dict]:
+    """List documents. type is Note|MeetingNotes|SponsorDoc|Deliverable|Policy|General.
+
+    Pass `related_task_id` to list the documents linked to a given task."""
     require_scope("read")
     with SessionLocal() as db:
         return _dump_list(DocumentOut, documents_service.list_documents(
-            db, type=type, status=status, assignee_id=assignee_id, top_level=top_level, limit=limit))
+            db, type=type, status=status, assignee_id=assignee_id,
+            related_task_id=related_task_id, top_level=top_level, limit=limit))
 
 
 @mcp.tool()
@@ -914,26 +933,36 @@ def create_document(title: str, content: str | None = None, type: str | None = N
                     status: str | None = None, parent_id: int | None = None,
                     assignee_id: int | None = None, related_event_id: int | None = None,
                     related_sponsor_id: int | None = None, related_project_id: int | None = None,
-                    related_meeting_id: int | None = None) -> dict:
+                    related_meeting_id: int | None = None, related_task_id: int | None = None) -> dict:
     """Create a document (markdown `content`). Use type=Deliverable + assignee_id for a per-person deliverable.
 
-    `committee` scopes the document to one committee (notes visibility)."""
+    `committee` scopes the document to one committee (notes visibility).
+    `related_task_id` links the doc to a task (e.g. a spec or brief for that task)."""
     require_scope("write")
     data = _coerce(DocumentCreate, _data(title=title, content=content, type=type, committee=committee,
                                          status=status,
                                          parent_id=parent_id, assignee_id=assignee_id,
                                          related_event_id=related_event_id, related_sponsor_id=related_sponsor_id,
-                                         related_project_id=related_project_id, related_meeting_id=related_meeting_id))
+                                         related_project_id=related_project_id, related_meeting_id=related_meeting_id,
+                                         related_task_id=related_task_id))
     with SessionLocal() as db:
         return _dump(DocumentOut, documents_service.create_document(db, data))
 
 
 @mcp.tool()
 def update_document(document_id: int, title: str | None = None, content: str | None = None,
-                    status: str | None = None, assignee_id: int | None = None) -> dict:
-    """Update a document's title, markdown content, status, or assignee."""
+                    status: str | None = None, assignee_id: int | None = None,
+                    related_task_id: int | None = None) -> dict:
+    """Update a document's title, markdown content, status, or assignee.
+
+    Pass `related_task_id` to link the doc to a task (or 0 to clear the link)."""
     require_scope("write")
-    data = _coerce(DocumentUpdate, _data(title=title, content=content, status=status, assignee_id=assignee_id))
+    data = _coerce(DocumentUpdate, _data(title=title, content=content, status=status,
+                                         assignee_id=assignee_id,
+                                         related_task_id=related_task_id or None))
+    # 0 is the explicit "unlink" sentinel; _data drops None, so re-inject a NULL.
+    if related_task_id == 0:
+        data["related_task_id"] = None
     with SessionLocal() as db:
         return _dump(DocumentOut, _require(documents_service.update_document(db, document_id, data),
                                            "document not found"))

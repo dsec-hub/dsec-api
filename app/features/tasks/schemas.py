@@ -65,6 +65,9 @@ class TaskBase(BaseModel):
     related_event_id: int | None = None
     related_project_id: int | None = None
     related_sponsor_id: int | None = None
+    # Additional owners beyond `assignee_id` (the primary). Full replace on PATCH;
+    # omit to leave unchanged, [] to clear. The primary is never duplicated here.
+    co_owner_ids: list[int] | None = None
 
 
 class TaskCreate(TaskBase):
@@ -99,6 +102,7 @@ class TaskOut(BaseModel):
     related_event_id: int | None
     related_project_id: int | None
     related_sponsor_id: int | None
+    co_owner_ids: list[int] = []
     archived: bool
     created_at: datetime
     updated_at: datetime
