@@ -1153,7 +1153,9 @@ class OAuthClient(Base):
     response_types: Mapped[list] = mapped_column(JSON, default=list)
     # Space-delimited scopes this client may ever request; further bounded at
     # consent by the logged-in user's role (see features/oauth/users.py).
-    scope: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Wide enough for the full coarse-scope grant (~270 chars and growing as the
+    # MCP catalog adds modules); see migration c4e8a2f6b9d1.
+    scope: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     token_endpoint_auth_method: Mapped[str] = mapped_column(
         String(32), default="none", server_default="none"
     )
@@ -1176,7 +1178,7 @@ class OAuthAuthCode(Base):
     client_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     redirect_uri: Mapped[str] = mapped_column(String(1024))
-    scope: Mapped[str] = mapped_column(String(256), default="", server_default="")
+    scope: Mapped[str] = mapped_column(String(1024), default="", server_default="")
     code_challenge: Mapped[str] = mapped_column(String(256))
     code_challenge_method: Mapped[str] = mapped_column(
         String(8), default="S256", server_default="S256"
@@ -1211,7 +1213,7 @@ class OAuthToken(Base):
     )
     client_id: Mapped[str] = mapped_column(String(64), index=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
-    scope: Mapped[str] = mapped_column(String(256), default="", server_default="")
+    scope: Mapped[str] = mapped_column(String(1024), default="", server_default="")
     resource: Mapped[str | None] = mapped_column(String(512), nullable=True)
     access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     refresh_expires_at: Mapped[datetime | None] = mapped_column(
