@@ -78,6 +78,12 @@ def test_documents_nesting(client, rw_key):
 
 def test_meetings_events_people_sponsors(client, rw_key):
     assert client.post("/meetings", json={"title": "Exec", "type": "Exec"}, headers=_h(rw_key)).status_code == 201
+    # meeting_date + optional "HH:MM" start time round-trip (date column untouched)
+    mt = client.post("/meetings", json={"title": "Standup", "meeting_date": "2026-08-01",
+                                        "meeting_time": "18:30"}, headers=_h(rw_key))
+    assert mt.status_code == 201 and mt.json()["meeting_time"] == "18:30"
+    assert client.patch(f"/meetings/{mt.json()['id']}", json={"meeting_time": "19:00"},
+                        headers=_h(rw_key)).json()["meeting_time"] == "19:00"
     e = client.post("/events-api", json={"name": "Hackathon", "start_date": "2026-08-01"}, headers=_h(rw_key))
     assert e.status_code == 201 and e.json()["start_date"] == "2026-08-01"
     assert client.post("/people", json={"name": "Ada", "type": "Exec"}, headers=_h(rw_key)).status_code == 201

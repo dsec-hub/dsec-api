@@ -75,6 +75,7 @@ class MeetingBase(BaseModel):
     type: str | None = None
     committee: str | None = None
     meeting_date: date | None = None
+    meeting_time: str | None = None  # "HH:MM" 24h local start time
     location: str | None = None
     attendees: list | None = None
     transcript: str | None = None
@@ -115,6 +116,7 @@ class MeetingOut(BaseModel):
     type: str | None
     committee: str | None
     meeting_date: date | None
+    meeting_time: str | None
     location: str | None
     attendees: list | None
     transcript: str | None

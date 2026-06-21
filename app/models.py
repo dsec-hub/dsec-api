@@ -614,6 +614,9 @@ class Meeting(Base):
     # Per-committee scoping for notes visibility (dsec-hub enforces who can see).
     committee: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     meeting_date: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
+    # Optional local start time, "HH:MM" 24h (kept separate from meeting_date so
+    # the existing Date column, ordering and upcoming-meeting filters are unchanged).
+    meeting_time: Mapped[str | None] = mapped_column(String(8), nullable=True)
     location: Mapped[str | None] = mapped_column(String(256), nullable=True)
     attendees: Mapped[list | None] = mapped_column(JSON, default=list)  # ["Name", ...]
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)

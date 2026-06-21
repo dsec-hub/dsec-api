@@ -832,20 +832,21 @@ def get_meeting(meeting_id: int) -> dict:
 
 @mcp.tool()
 def create_meeting(title: str, type: str | None = None, committee: str | None = None,
-                   meeting_date: str | None = None,
+                   meeting_date: str | None = None, meeting_time: str | None = None,
                    location: str | None = None, attendees: list[str] | None = None,
                    transcript: str | None = None, related_event_id: int | None = None,
                    agenda_items: list[dict] | None = None) -> dict:
     """Create a meeting record. Pass a transcript now, or add it later before generating notes.
 
-    `committee` scopes the meeting (and any notes generated from it) to one committee.
-    `agenda_items` optionally sets the pre-meeting agenda at creation time — a list
-    of {title, owner_person_id?, duration_minutes?, notes?, related_task_id?,
-    related_event_id?} in display order (see set_meeting_agenda). It starts as a
-    private draft until you call share_meeting_agenda."""
+    `meeting_date` is ISO YYYY-MM-DD; `meeting_time` is an optional local start time
+    as "HH:MM" (24h). `committee` scopes the meeting (and any notes generated from
+    it) to one committee. `agenda_items` optionally sets the pre-meeting agenda at
+    creation time — a list of {title, owner_person_id?, duration_minutes?, notes?,
+    related_task_id?, related_event_id?} in display order (see set_meeting_agenda).
+    It starts as a private draft until you call share_meeting_agenda."""
     require_scope("write")
     data = _coerce(MeetingCreate, _data(title=title, type=type, committee=committee,
-                                        meeting_date=meeting_date,
+                                        meeting_date=meeting_date, meeting_time=meeting_time,
                                         location=location, attendees=attendees, transcript=transcript,
                                         related_event_id=related_event_id, agenda_items=agenda_items))
     with SessionLocal() as db:
@@ -855,16 +856,19 @@ def create_meeting(title: str, type: str | None = None, committee: str | None = 
 @mcp.tool()
 def update_meeting(meeting_id: int, title: str | None = None, type: str | None = None,
                    committee: str | None = None, meeting_date: str | None = None,
+                   meeting_time: str | None = None,
                    location: str | None = None, attendees: list[str] | None = None,
                    transcript: str | None = None, summary: str | None = None,
                    notes: str | None = None, action_items: list[str] | None = None,
                    status: str | None = None, related_event_id: int | None = None) -> dict:
     """Update a meeting (only the fields you pass change). Use this to edit a
-    transcript, or to hand-write `summary` / `notes` / `action_items` instead of
-    generating them with generate_meeting_notes."""
+    transcript, set the `meeting_date`/`meeting_time` ("HH:MM" 24h), or hand-write
+    `summary` / `notes` / `action_items` instead of generating them with
+    generate_meeting_notes."""
     require_scope("write")
     data = _coerce(MeetingUpdate, _data(title=title, type=type, committee=committee,
-                                        meeting_date=meeting_date, location=location,
+                                        meeting_date=meeting_date, meeting_time=meeting_time,
+                                        location=location,
                                         attendees=attendees, transcript=transcript, summary=summary,
                                         notes=notes, action_items=action_items, status=status,
                                         related_event_id=related_event_id))
