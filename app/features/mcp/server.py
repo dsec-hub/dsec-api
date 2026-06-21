@@ -834,15 +834,20 @@ def get_meeting(meeting_id: int) -> dict:
 def create_meeting(title: str, type: str | None = None, committee: str | None = None,
                    meeting_date: str | None = None,
                    location: str | None = None, attendees: list[str] | None = None,
-                   transcript: str | None = None, related_event_id: int | None = None) -> dict:
+                   transcript: str | None = None, related_event_id: int | None = None,
+                   agenda_items: list[dict] | None = None) -> dict:
     """Create a meeting record. Pass a transcript now, or add it later before generating notes.
 
-    `committee` scopes the meeting (and any notes generated from it) to one committee."""
+    `committee` scopes the meeting (and any notes generated from it) to one committee.
+    `agenda_items` optionally sets the pre-meeting agenda at creation time — a list
+    of {title, owner_person_id?, duration_minutes?, notes?, related_task_id?,
+    related_event_id?} in display order (see set_meeting_agenda). It starts as a
+    private draft until you call share_meeting_agenda."""
     require_scope("write")
     data = _coerce(MeetingCreate, _data(title=title, type=type, committee=committee,
                                         meeting_date=meeting_date,
                                         location=location, attendees=attendees, transcript=transcript,
-                                        related_event_id=related_event_id))
+                                        related_event_id=related_event_id, agenda_items=agenda_items))
     with SessionLocal() as db:
         return _dump(MeetingOut, meetings_service.create_meeting(db, data))
 
@@ -898,6 +903,73 @@ def generate_meeting_notes(meeting_id: int, transcript: str | None = None) -> di
         except LLMError as exc:
             raise ValueError(f"LLM error: {exc}")
         return _dump(MeetingOut, meeting)
+
+
+# --------------------------------------------------------------------------- #
+# meeting agendas (pre-meeting, shared read-only with invitees)
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def get_meeting_agenda(meeting_id: int) -> dict:
+    """Get a meeting's pre-meeting agenda: the ordered items (each with its title,
+    owner, duration and any linked task/event), the total estimated duration, and
+    the share state (draft | shared | locked, plus the public link if shared)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        meeting = _require(meetings_service.get_meeting(db, meeting_id), "meeting not found")
+        return meetings_service.agenda_view(meeting).model_dump(mode="json")
+
+
+@mcp.tool()
+def set_meeting_agenda(meeting_id: int, items: list[dict]) -> dict:
+    """Replace a meeting's full agenda. `items` is the complete ordered list — to
+    add, edit, remove or reorder, send the whole list in the order you want it.
+
+    Each item: {title (required), owner_person_id?, duration_minutes?, notes?
+    (markdown), related_task_id?, related_event_id?}. Keep an item's existing `id`
+    to preserve it; new items get an id automatically. Owner/task/event ids are
+    validated against People/Tasks/Events. A locked agenda can't be edited."""
+    require_scope("write")
+    with SessionLocal() as db:
+        try:
+            meeting = meetings_service.set_meeting_agenda(db, meeting_id, items)
+        except meetings_service.AgendaLockedError as exc:
+            raise ValueError(str(exc))
+        # _validate_and_normalise raises ValueError for unknown owner/task/event
+        # ids; that already surfaces to the MCP client as a clean tool error.
+        meeting = _require(meeting, "meeting not found")
+        return meetings_service.agenda_view(meeting).model_dump(mode="json")
+
+
+@mcp.tool()
+def share_meeting_agenda(meeting_id: int, confirm: bool = False) -> dict:
+    """Share a meeting's agenda with invitees: marks it 'shared' and returns a
+    stable, PUBLIC, no-auth read-only link (share_url). Idempotent — the link
+    never changes once minted.
+
+    This publishes the agenda externally, so it's gated: call with confirm=true to
+    actually share. Without confirm it just tells you what would happen."""
+    require_scope("write")
+    if not confirm:
+        raise ValueError(
+            "share_meeting_agenda publishes a public, no-auth link to this agenda. "
+            "Re-call with confirm=true to share it and get the link."
+        )
+    with SessionLocal() as db:
+        meeting = _require(meetings_service.share_meeting_agenda(db, meeting_id),
+                           "meeting not found")
+        return meetings_service.agenda_view(meeting).model_dump(mode="json")
+
+
+@mcp.tool()
+def lock_meeting_agenda(meeting_id: int) -> dict:
+    """Freeze a meeting's agenda once the meeting starts (status -> locked). It
+    stays publicly viewable at its share link but can no longer be edited."""
+    require_scope("write")
+    with SessionLocal() as db:
+        meeting = _require(meetings_service.lock_meeting_agenda(db, meeting_id),
+                           "meeting not found")
+        return meetings_service.agenda_view(meeting).model_dump(mode="json")
 
 
 # --------------------------------------------------------------------------- #

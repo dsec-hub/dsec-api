@@ -14,7 +14,14 @@ from app.models import APIKey
 
 from . import service
 from .notes import generate_meeting_notes
-from .schemas import GenerateNotes, MeetingCreate, MeetingOut, MeetingUpdate
+from .schemas import (
+    AgendaOut,
+    AgendaSet,
+    GenerateNotes,
+    MeetingCreate,
+    MeetingOut,
+    MeetingUpdate,
+)
 
 router = APIRouter()
 
@@ -95,6 +102,80 @@ def archive_meeting(
     if meeting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
     return MeetingOut.model_validate(meeting)
+
+
+# --------------------------------------------------------------------------- #
+# Pre-meeting agenda (built before the meeting, shared read-only with invitees)
+# --------------------------------------------------------------------------- #
+
+@router.get("/{meeting_id}/agenda", response_model=AgendaOut)
+def get_agenda(
+    meeting_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> AgendaOut:
+    """Return the ordered agenda items plus the total estimated duration and the
+    share state (status, token, public URL)."""
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    meeting = service.get_meeting(db, meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
+    return service.agenda_view(meeting)
+
+
+@router.put("/{meeting_id}/agenda", response_model=AgendaOut)
+def set_agenda(
+    meeting_id: int,
+    body: AgendaSet,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> AgendaOut:
+    """Replace the meeting's full agenda item list. Validates owner/task/event
+    references; refuses to edit a locked agenda (409)."""
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    try:
+        meeting = service.set_meeting_agenda(db, meeting_id, body.items)
+    except service.AgendaLockedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
+    return service.agenda_view(meeting)
+
+
+@router.post("/{meeting_id}/agenda/share", response_model=AgendaOut)
+def share_agenda(
+    meeting_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> AgendaOut:
+    """Share the agenda: status -> shared, stamp shared_at, mint a stable share
+    token. Returns the public read-only URL. Idempotent."""
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    meeting = service.share_meeting_agenda(db, meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
+    return service.agenda_view(meeting)
+
+
+@router.post("/{meeting_id}/agenda/lock", response_model=AgendaOut)
+def lock_agenda(
+    meeting_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> AgendaOut:
+    """Freeze the agenda once the meeting starts (status -> locked). It stays
+    publicly viewable but can no longer be edited."""
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    meeting = service.lock_meeting_agenda(db, meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
+    return service.agenda_view(meeting)
 
 
 @router.post("/{meeting_id}/generate-notes", response_model=MeetingOut)

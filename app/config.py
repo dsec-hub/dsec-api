@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     # staff scan it to confirm the member (name + active status + face photo).
     MEMBER_VERIFY_BASE_URL: str = "https://app.dsec.club/verify"
 
+    # --- Pre-meeting agenda share links ---
+    # When a meeting agenda is shared, the API stamps a stable, unguessable token
+    # and returns a public read-only URL of the form <base>/<token>. The view
+    # itself is rendered by the committee dashboard (dsec-hub), which reads the
+    # meeting row directly from Neon by token — no auth, no API key. Override per
+    # environment (local dev runs the hub on :3002).
+    AGENDA_SHARE_BASE_URL: str = "https://hub.dsec.club/agenda"
+
     # --- OAuth 2.1 (MCP authorization server) ---
     # The /mcp endpoint ALSO accepts OAuth 2.1 access tokens (alongside the
     # dsec_live_ API keys), so MCP clients whose "add connector" dialog only takes

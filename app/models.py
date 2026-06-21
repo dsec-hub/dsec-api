@@ -625,6 +625,24 @@ class Meeting(Base):
     related_event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), index=True, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
+    # --- Pre-meeting agenda (distinct from the post-meeting transcript/notes) ---
+    # The agenda is built BEFORE a meeting and shared read-only with invitees via
+    # a stable public link. Each item is a dict:
+    #   {id, order, title, owner_person_id, duration_minutes, notes,
+    #    related_task_id, related_event_id}
+    agenda_items: Mapped[list | None] = mapped_column(JSON, default=list)
+    # draft (private) -> shared (public link live) -> locked (frozen at meeting start)
+    agenda_status: Mapped[str] = mapped_column(
+        String(16), default="draft", server_default=text("'draft'"), nullable=False
+    )
+    agenda_shared_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Unguessable token for the public /agenda/<token> read-only view (set on share).
+    agenda_share_token: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

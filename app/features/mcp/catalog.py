@@ -192,6 +192,14 @@ CATALOG: tuple[Tool, ...] = (
          "Soft-delete (archive) a meeting. Confirm with the human first."),
     Tool("generate_meeting_notes", "trigger", "Meetings",
          "AI-summarise a transcript into notes and action items (spends tokens)."),
+    Tool("get_meeting_agenda", "read", "Meetings",
+         "Get a meeting's pre-meeting agenda — ordered items, total duration and share state."),
+    Tool("set_meeting_agenda", "write", "Meetings",
+         "Replace a meeting's agenda (send the whole ordered item list to add/edit/reorder)."),
+    Tool("share_meeting_agenda", "write", "Meetings",
+         "Share the agenda with invitees and return the public read-only link. Confirm first."),
+    Tool("lock_meeting_agenda", "write", "Meetings",
+         "Freeze the agenda once the meeting starts (still viewable, no longer editable)."),
 
     # ---- Documents -------------------------------------------------------- #
     Tool("list_documents", "read", "Documents",
