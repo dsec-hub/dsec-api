@@ -20,6 +20,7 @@ def list_partners(
     db: Session,
     *,
     archived: bool = False,
+    status: str | None = None,
     search: str | None = None,
     limit: int = 100,
     offset: int = 0,
@@ -27,6 +28,8 @@ def list_partners(
     stmt = select(Partner)
     if not archived:
         stmt = stmt.where(Partner.archived.is_(False))
+    if status:
+        stmt = stmt.where(Partner.status == status)
     if search:
         term = f"%{search.lower()}%"
         stmt = stmt.where(

@@ -16,7 +16,13 @@ class PartnerBase(BaseModel):
 
     name: str | None = None
     website: str | None = None
+    email: str | None = None
+    instagram: str | None = None
+    linkedin: str | None = None
+    facebook: str | None = None
     notes: str | None = None
+    # Relationship pipeline: lead -> contacted -> active -> inactive.
+    status: str | None = None
 
 
 class PartnerCreate(PartnerBase):
@@ -33,7 +39,12 @@ class PartnerOut(BaseModel):
     id: int
     name: str
     website: str | None
+    email: str | None
+    instagram: str | None
+    linkedin: str | None
+    facebook: str | None
     notes: str | None
+    status: str
     archived: bool
     created_at: datetime
     updated_at: datetime

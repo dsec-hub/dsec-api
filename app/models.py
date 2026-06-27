@@ -1009,7 +1009,19 @@ class Partner(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(256))
     website: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Contact + socials — used to track a club before/while we collaborate.
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    instagram: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    linkedin: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    facebook: Mapped[str | None] = mapped_column(String(256), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lightweight relationship pipeline (NOT the full sponsor CRM): a club we've
+    # sourced starts as a "lead" and progresses lead -> contacted -> active ->
+    # inactive. New rows default to "lead"; existing partners were backfilled to
+    # "active" by the migration that added this column.
+    status: Mapped[str] = mapped_column(
+        String(32), default="lead", server_default=text("'lead'"), index=True
+    )
     # Publish this partner's logo on the public events it is linked to. Off by
     # default — partners are internal until an exec explicitly opts one in.
     show_on_website: Mapped[bool] = mapped_column(

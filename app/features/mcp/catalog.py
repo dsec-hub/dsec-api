@@ -135,13 +135,14 @@ CATALOG: tuple[Tool, ...] = (
 
     # ---- Partners --------------------------------------------------------- #
     Tool("list_partners", "read", "Partners",
-         "List collaborator clubs / partner organisations."),
+         "List collaborator clubs / partner orgs (optionally filter by status: "
+         "lead | contacted | active | inactive)."),
     Tool("get_partner", "read", "Partners",
          "Get one partner org / club by id."),
     Tool("create_partner", "write", "Partners",
-         "Add a partner org / club."),
+         "Add a partner org / club (name, website, email, socials, status)."),
     Tool("update_partner", "write", "Partners",
-         "Update a partner's details."),
+         "Update a partner's details / move it along the pipeline (status)."),
     Tool("archive_partner", "write", "Partners",
          "Soft-delete (archive) a partner org. Confirm with the human first."),
 

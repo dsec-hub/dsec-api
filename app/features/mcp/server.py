@@ -552,11 +552,14 @@ def unlink_event_connection(event_id: int, other_event_id: int) -> dict:
 # --------------------------------------------------------------------------- #
 
 @mcp.tool()
-def list_partners(search: str | None = None, limit: int = 50) -> list[dict]:
-    """List partner organisations / collaborator clubs."""
+def list_partners(status: str | None = None, search: str | None = None, limit: int = 50) -> list[dict]:
+    """List partner organisations / collaborator clubs. Optional `status` filters
+    by pipeline stage: lead | contacted | active | inactive."""
     require_scope("read")
     with SessionLocal() as db:
-        return _dump_list(PartnerOut, partners_service.list_partners(db, search=search, limit=limit))
+        return _dump_list(
+            PartnerOut, partners_service.list_partners(db, status=status, search=search, limit=limit)
+        )
 
 
 @mcp.tool()
@@ -568,20 +571,32 @@ def get_partner(partner_id: int) -> dict:
 
 
 @mcp.tool()
-def create_partner(name: str, website: str | None = None, notes: str | None = None) -> dict:
-    """Add a partner org/club. Link it to events with `link_event_partner`."""
+def create_partner(name: str, website: str | None = None, email: str | None = None,
+                   instagram: str | None = None, linkedin: str | None = None,
+                   facebook: str | None = None, notes: str | None = None,
+                   status: str | None = None) -> dict:
+    """Add a partner org/club. Link it to events with `link_event_partner`.
+    `status` is the pipeline stage (lead | contacted | active | inactive) and
+    defaults to "lead" when omitted."""
     require_scope("write")
-    data = _coerce(PartnerCreate, _data(name=name, website=website, notes=notes))
+    data = _coerce(PartnerCreate, _data(name=name, website=website, email=email,
+                                        instagram=instagram, linkedin=linkedin,
+                                        facebook=facebook, notes=notes, status=status))
     with SessionLocal() as db:
         return _dump(PartnerOut, partners_service.create_partner(db, data))
 
 
 @mcp.tool()
 def update_partner(partner_id: int, name: str | None = None, website: str | None = None,
-                   notes: str | None = None) -> dict:
-    """Update a partner org (only the fields you pass change)."""
+                   email: str | None = None, instagram: str | None = None,
+                   linkedin: str | None = None, facebook: str | None = None,
+                   notes: str | None = None, status: str | None = None) -> dict:
+    """Update a partner org (only the fields you pass change). `status` moves the
+    club along the pipeline: lead | contacted | active | inactive."""
     require_scope("write")
-    data = _coerce(PartnerUpdate, _data(name=name, website=website, notes=notes))
+    data = _coerce(PartnerUpdate, _data(name=name, website=website, email=email,
+                                        instagram=instagram, linkedin=linkedin,
+                                        facebook=facebook, notes=notes, status=status))
     with SessionLocal() as db:
         return _dump(PartnerOut, _require(partners_service.update_partner(db, partner_id, data),
                                           "partner not found"))

@@ -21,6 +21,7 @@ router = APIRouter()
 def list_partners(
     request: Request,
     search: str | None = None,
+    status: str | None = None,
     include_archived: bool = False,
     limit: int = Query(100, le=200),
     offset: int = 0,
@@ -29,7 +30,7 @@ def list_partners(
 ) -> list[PartnerOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_partners(
-        db, archived=include_archived, search=search, limit=limit, offset=offset
+        db, archived=include_archived, status=status, search=search, limit=limit, offset=offset
     )
     return [PartnerOut.model_validate(r) for r in rows]
 
