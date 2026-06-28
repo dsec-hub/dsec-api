@@ -1470,3 +1470,176 @@ class OAuthToken(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+# -----------------------------------------------------------------------------
+# Games platform — arcade (Flappy Duck) + Codle. The API is the ONLY brain:
+# clients render and submit, the engine decides every score, point, leaderboard
+# position and the monthly draw. A play in Discord and a play in the portal land
+# in the SAME game_attempt ledger and roll up to the SAME monthly draw, keyed to
+# the student account. Adding a game later = a new engine file + one registry
+# line; nothing in these tables changes.
+# -----------------------------------------------------------------------------
+
+
+class Game(Base):
+    """A registered game. `surface` is where it plays: discord | portal | both."""
+
+    __tablename__ = "game"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # flappy-duck/codle
+    name: Mapped[str] = mapped_column(String(128))
+    surface: Mapped[str] = mapped_column(
+        String(16), default="both", server_default=text("'both'")
+    )  # discord|portal|both
+    active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+
+class GameRound(Base):
+    """The daily/period challenge instance so everyone gets the SAME puzzle.
+
+    `payload` holds the FULL puzzle including any answer — it is SERVER-ONLY and
+    is NEVER returned to a client verbatim (the engine's public_round() strips it
+    to a safe render shape). Unique on (game_id, period_key) so a period yields
+    exactly one round.
+    """
+
+    __tablename__ = "game_round"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("game.id"), index=True)
+    period_key: Mapped[str] = mapped_column(String(32), index=True)  # e.g. 2026-06-24
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    opens_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closes_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+    __table_args__ = (UniqueConstraint("game_id", "period_key", name="uq_game_round"),)
+
+
+class GamePlayer(Base):
+    """The engine's identity row — one per portal (student) account.
+
+    `account_id` is the dsec-app portal_account.id (the student account). It is a
+    plain int, NOT a DB foreign key, because portal_account is app-owned (created
+    by dsec-app scripts, not Alembic) and absent from the API's own/test schema.
+    `email` is the membership-resolution key, matched (lower-cased) against the
+    DUSA members roster. `display_name` is for leaderboards.
+    """
+
+    __tablename__ = "game_player"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+
+
+class GameAccountLink(Base):
+    """Binds a Discord user to a GamePlayer so Discord plays key to the same
+    student account as portal plays (one points ledger across both surfaces)."""
+
+    __tablename__ = "game_account_link"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("game_player.id", ondelete="CASCADE"), index=True
+    )
+    discord_user_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+
+class GameAttempt(Base):
+    """One row per play — the single points ledger for ALL surfaces.
+
+    `points` is computed by the API at submit time (never by a client). For a
+    stateful game (Codle) the row is created on the first guess and updated as
+    guesses arrive; points are set when the round finishes. `is_member_play`
+    records whether the player was a current member at play time — the monthly
+    draw counts only member plays. `round_id` is null for free-play arcade.
+    """
+
+    __tablename__ = "game_attempt"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("game.id"), index=True)
+    round_id: Mapped[int | None] = mapped_column(
+        ForeignKey("game_round.id"), index=True, nullable=True
+    )
+    player_id: Mapped[int] = mapped_column(ForeignKey("game_player.id"), index=True)
+    raw_score: Mapped[float] = mapped_column(Float, default=0.0, server_default=text("0"))
+    points: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    is_member_play: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    surface: Mapped[str | None] = mapped_column(String(16), nullable=True)  # portal|discord
+    played_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_game_attempt_game_round_player", "game_id", "round_id", "player_id"),
+        Index("ix_game_attempt_player_played", "player_id", "played_at"),
+    )
+
+
+class DrawCycle(Base):
+    """Monthly rollup of the points ledger. The highest total points among member
+    plays wins (skill-based competition, NOT a random lottery — this matters for
+    the DUSA framing). One cycle per period_key (e.g. 2026-06)."""
+
+    __tablename__ = "draw_cycle"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(16), unique=True, index=True)  # e.g. 2026-06
+    status: Mapped[str] = mapped_column(
+        String(16), default="open", server_default=text("'open'"), index=True
+    )  # open|closed
+    winner_player_id: Mapped[int | None] = mapped_column(
+        ForeignKey("game_player.id"), index=True, nullable=True
+    )
+    total_points_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )

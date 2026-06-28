@@ -169,6 +169,34 @@ class Settings(BaseSettings):
     DISCORD_WEBHOOK_SECRET: str = ""
     CALCOM_WEBHOOK_SECRET: str = ""
 
+    # --- Discord bot / slash-command interactions (games platform) ---
+    # The Discord bot is a WEBHOOK bot (no gateway socket): Discord POSTs each
+    # interaction to /discord/interactions, which is verified with Ed25519 (NOT
+    # HMAC) against this PUBLIC KEY — a hex string from the Discord Developer
+    # Portal -> your application -> General Information -> Public Key. Blank
+    # disables verification in dev/test and fails closed in production. The
+    # application id + bot token are used only to REGISTER slash commands and send
+    # REST follow-ups (no socket). Leave blank to disable the integration.
+    DISCORD_PUBLIC_KEY: str = ""
+    DISCORD_APPLICATION_ID: str = ""
+    DISCORD_BOT_TOKEN: str = ""
+
+    # --- Games platform (arcade + Codle; surface = games.dsec.club) ---
+    # Public base URL of the playable web surface the bot deep-links players to
+    # (e.g. /play -> ${GAMES_BASE_URL}/flappy-duck). Override per environment.
+    GAMES_BASE_URL: str = "https://games.dsec.club"
+    # Secret that derives the short Discord <-> account link codes (HMAC over the
+    # account id, same idea as the membership-card code). Blank reuses
+    # AGENT_SECRET (already required non-default in prod), so there is no NEW
+    # required secret; set it to rotate link codes independently.
+    GAMES_LINK_SECRET: str = ""
+    # Secret that signs the short-lived Flappy Duck play-session token (binds a
+    # score submission to a server-issued round so a recorded score can't be
+    # replayed forever). Blank reuses AGENT_SECRET.
+    GAMES_SESSION_SECRET: str = ""
+    # How long a signed Flappy session stays valid after the round is fetched.
+    GAMES_SESSION_TTL: int = 3600  # seconds
+
     # --- CORS (browser origins allowed to call the API directly) ---
     # Server-to-server callers (our Next.js apps' server code) are NOT subject to
     # CORS — this only governs fetches issued from a browser tab on one of our own
@@ -176,8 +204,8 @@ class Settings(BaseSettings):
     # Comma-separated; defaults cover the prod subdomains + local dev ports.
     CORS_ALLOW_ORIGINS: str = (
         "https://dsec.club,https://www.dsec.club,"
-        "https://app.dsec.club,https://hub.dsec.club,"
-        "http://localhost:3000,http://localhost:3001,http://localhost:3002"
+        "https://app.dsec.club,https://hub.dsec.club,https://games.dsec.club,"
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003"
     )
 
     @property

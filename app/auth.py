@@ -66,11 +66,77 @@ def require_basic_auth(
     return credentials.username
 
 
+def require_cron_secret(authorization: str | None = Header(default=None)) -> None:
+    """Authorise a scheduled (Vercel Cron) call.
+
+    Vercel Cron sends ``Authorization: Bearer <CRON_SECRET>`` (its documented
+    convention — not a custom header), so we read the bearer token and compare it
+    constant-time to ``settings.CRON_SECRET``. Fails CLOSED in production (503 if
+    unconfigured, 401 on mismatch); in dev/test a blank secret allows the route
+    through so the monthly draw can be exercised without provisioning a secret.
+    """
+    expected = settings.CRON_SECRET
+    if not expected:
+        if _is_production():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="cron is not configured",
+            )
+        return
+    provided = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or missing cron secret",
+        )
+
+
 def _secret_for_mode(mode: str) -> str:
     return {
-        "discord": settings.DISCORD_WEBHOOK_SECRET,
         "calcom": settings.CALCOM_WEBHOOK_SECRET,
     }.get(mode, "")
+
+
+async def _verify_discord_ed25519(request: Request) -> None:
+    """Verify a Discord interaction signature (Ed25519, NOT HMAC).
+
+    Discord signs each interaction with its application's private key over
+    ``X-Signature-Timestamp`` + the raw request body, and we verify it against the
+    application's PUBLIC KEY (a hex string from the Developer Portal). When no
+    public key is configured the request fails closed in production (503) and is
+    allowed through in dev/test so the endpoint stays exercisable without a key.
+    """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    public_key = settings.DISCORD_PUBLIC_KEY
+    if not public_key:
+        if _is_production():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="discord webhook is not configured",
+            )
+        return
+
+    signature = request.headers.get("X-Signature-Ed25519", "")
+    timestamp = request.headers.get("X-Signature-Timestamp", "")
+    body = await request.body()
+    if not signature or not timestamp:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid discord webhook signature",
+        )
+    try:
+        verify_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key))
+        verify_key.verify(bytes.fromhex(signature), timestamp.encode() + body)
+    except (InvalidSignature, ValueError) as exc:
+        # ValueError covers a malformed hex signature/public key.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid discord webhook signature",
+        ) from exc
 
 
 def verify_webhook_signature(mode: str) -> Callable:
@@ -79,21 +145,23 @@ def verify_webhook_signature(mode: str) -> Callable:
     `mode` selects both the secret and the provider-specific header/format:
 
     - ``calcom``: HMAC-SHA256 of the raw body (hex digest), compared against the
-      ``X-Cal-Signature-256`` header. This is the format Cal.com uses and is the
-      one live consumer (`/calcom/webhook` creates a SponsorLead).
-    - ``discord``: HMAC is a PLACEHOLDER. Discord signs interactions with Ed25519
-      (public-key) over ``X-Signature-Timestamp`` + raw body, verified against the
-      app's public key — NOT HMAC. The `/discord/webhook` route is a 501 stub, so
-      nothing is processed yet; real Ed25519 verification (PyNaCl/`cryptography`)
-      must land before it does any work. See TODO.md "v2 integrations".
+      ``X-Cal-Signature-256`` header. This is the format Cal.com uses and is one
+      live consumer (`/calcom/webhook` creates a SponsorLead).
+    - ``discord``: Ed25519 public-key verification over ``X-Signature-Timestamp``
+      + raw body against the app's ``DISCORD_PUBLIC_KEY`` (NOT HMAC — Discord
+      never sends an HMAC). Powers the `/discord/interactions` webhook bot.
 
-    When no secret is configured the request fails closed in production (503) and
-    is allowed through in dev/test so the stub stays reachable. Raw body bytes are
-    read directly from the request so a JSON parser never consumes the stream
-    before the signature is computed.
+    When no secret/key is configured the request fails closed in production (503)
+    and is allowed through in dev/test so the endpoint stays reachable. Raw body
+    bytes are read directly from the request so a JSON parser never consumes the
+    stream before the signature is computed.
     """
 
     async def _dep(request: Request) -> None:
+        if mode == "discord":
+            await _verify_discord_ed25519(request)
+            return
+
         secret = _secret_for_mode(mode)
         if not secret:
             # No secret configured. In production that means the webhook is not
@@ -109,10 +177,7 @@ def verify_webhook_signature(mode: str) -> Callable:
             return
 
         raw = await request.body()
-        if mode == "discord":
-            provided = request.headers.get("X-Signature-Ed25519", "")
-        else:  # calcom
-            provided = request.headers.get("X-Cal-Signature-256", "")
+        provided = request.headers.get("X-Cal-Signature-256", "")  # calcom
 
         expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
         # Some providers prefix with "sha256=" — normalise before comparing.

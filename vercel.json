@@ -14,5 +14,11 @@
       "src": "/(.*)",
       "dest": "app/main.py"
     }
+  ],
+  "crons": [
+    {
+      "path": "/games/cron/close-draw",
+      "schedule": "0 1 1 * *"
+    }
   ]
 }

@@ -33,6 +33,8 @@ from app.features.documents.router import router as documents_router
 from app.features.email.router import router as email_router
 from app.features.events.router import router as events_router
 from app.features.finance.router import router as finance_router
+from app.features.game_link.router import router as game_link_router
+from app.features.games.router import router as games_router
 from app.features.ingest.router import router as ingest_router
 from app.features.media.router import router as media_router
 from app.features.mcp.auth import MCPAuthMiddleware
@@ -120,6 +122,8 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
     app.include_router(discord_router, prefix="/discord", tags=["discord"])
     app.include_router(calcom_router, prefix="/calcom", tags=["calcom"])
+    app.include_router(games_router, prefix="/games", tags=["games"])
+    app.include_router(game_link_router, prefix="/game-link", tags=["games"])
 
     # OAuth 2.1 authorization server (login-based auth for MCP clients whose
     # connector dialog only takes a URL). Mounted at the ROOT — no prefix — so
