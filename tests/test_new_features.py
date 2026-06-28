@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 
 import pytest
 
@@ -159,6 +160,57 @@ def test_event_connections(client, rw_key, ro_key):
 
 
 # --------------------------------------------------------------------------- #
+# Public website: team feed + per-person profile page
+# --------------------------------------------------------------------------- #
+
+def test_public_team_feed_and_member_detail(client, db):
+    """The published roster surfaces on /website/team with a stable slug, and each
+    person's /website/team/{slug} detail carries their role + the events/projects
+    they lead (published only). Unpublished people never leak."""
+    pres = models.Person(
+        name="Ada Lovelace", type="Exec", role_title="President",
+        committee="Executive", bio="Runs the club.", show_on_website=True,
+        display_order=0, instagram="@ada", linkedin="/in/ada", github="adal",
+        website="https://ada.dev", discord="ada#1",
+    )
+    lead = models.Person(
+        name="Grace Hopper", type="Committee Lead", role_title="Web Lead",
+        committee="Web Development", show_on_website=True, display_order=1,
+    )
+    hidden = models.Person(name="Secret Member", type="Committee Member", show_on_website=False)
+    db.add_all([pres, lead, hidden])
+    db.commit()
+
+    ev = models.Event(name="Launch Night", start_date=date(2099, 9, 1),
+                      is_public=True, event_lead_id=pres.id)
+    draft = models.Event(name="Secret Planning", start_date=date(2099, 10, 1),
+                         is_public=False, event_lead_id=pres.id)  # draft — must not leak
+    proj = models.Project(name="Duck Bot", slug="duck-bot", summary="A bot.",
+                          is_public=True, lead_id=pres.id)
+    db.add_all([ev, draft, proj])
+    db.commit()
+
+    # List feed: only published people, in display order, each with a slug.
+    feed = client.get("/website/team").json()
+    assert [p["name"] for p in feed] == ["Ada Lovelace", "Grace Hopper"]  # hidden excluded
+    ada = feed[0]
+    assert ada["slug"] == "ada-lovelace"
+    assert ada["type"] == "Exec" and ada["role"] == "President"
+    assert ada["github"] == "adal" and "discord" not in ada  # discord is detail-only
+
+    # Detail: full profile + the events/projects they lead (published only).
+    detail = client.get("/website/team/ada-lovelace").json()
+    assert detail["committee"] == "Executive" and detail["discord"] == "ada#1"
+    assert [e["title"] for e in detail["led_events"]] == ["Launch Night"]  # draft excluded
+    assert detail["led_events"][0]["upcoming"] is True
+    assert [p["title"] for p in detail["led_projects"]] == ["Duck Bot"]
+
+    # Unpublished + unknown slugs 404 (the slug must resolve in the published roster).
+    assert client.get("/website/team/secret-member").status_code == 404
+    assert client.get("/website/team/nobody").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
 # REST: sponsor contacts
 # --------------------------------------------------------------------------- #
 
@@ -295,3 +347,139 @@ def test_mcp_read_scope_cannot_write_new_tools(db):
         mcpserver.list_partners()  # allowed
         with pytest.raises(mcpauth.MCPScopeError):
             mcpserver.create_partner(name="Nope")
+
+
+# --------------------------------------------------------------------------- #
+# Flagship marketing event: secrecy gating + public teaser funnel
+# --------------------------------------------------------------------------- #
+
+def test_flagship_secrecy_gating_and_signup(client, rw_key):
+    """A flagship event in `teaser` state hides its real specifics on the public
+    feed, exposes the flagship_* fields, declassifies on reveal, and feeds an
+    idempotent public signup funnel (sponsor signups also seed a sponsor lead)."""
+    # A published flagship event, still teasing, with real specifics + a line-up.
+    ev = client.post(
+        "/events-api",
+        json={
+            "name": "Operation Duckshot", "start_date": "2099-12-01",
+            "is_public": True, "is_flagship": True, "flagship_theme": "nightrun",
+            "flagship_state": "teaser",
+            "flagship_teaser_title": "OPERATION DUCKSHOT",
+            "flagship_teaser_body": "Something big is coming.",
+            "flagship_reveal_at": "2099-11-25T18:00:00+00:00",
+            "description": "TOP SECRET 48h hackathon.", "venue": "The Bunker",
+            "ticket_url": "https://tickets.example/duckshot",
+        },
+        headers=_h(rw_key),
+    ).json()
+    eid = ev["id"]
+    # EventOut round-trips the flagship fields.
+    assert ev["is_flagship"] is True and ev["flagship_theme"] == "nightrun"
+    assert ev["flagship_state"] == "teaser"
+    client.post(f"/events-api/{eid}/speakers", json={"name": "Mystery Guest"}, headers=_h(rw_key))
+
+    feed = client.get("/website/events").json()
+    slug = next(e["slug"] for e in feed if e["title"] == "Operation Duckshot")
+    assert slug == "operation-duckshot-2099-12-01"
+
+    # Teaser gating: the safe shell + flagship_* remain; specifics are nulled.
+    teaser = client.get(f"/website/events/{slug}").json()
+    assert teaser["flagship"] is True and teaser["flagship_theme"] == "nightrun"
+    assert teaser["flagship_state"] == "teaser"
+    assert teaser["flagship_teaser_title"] == "OPERATION DUCKSHOT"
+    assert teaser["flagship_teaser_body"] == "Something big is coming."
+    assert teaser["flagship_reveal_at"].startswith("2099-11-25T18:00:00")
+    assert teaser["title"] == "Operation Duckshot"        # kept
+    assert teaser["date"] == "2099-12-01"                 # kept
+    assert teaser["description"] is None                  # gated
+    assert teaser["venue"] is None                        # gated
+    assert teaser["ticket_url"] is None                   # gated
+    assert teaser["speakers"] == []                       # gated
+
+    # Reveal: declassify → everything is exposed as a normal event.
+    client.patch(f"/events-api/{eid}", json={"flagship_state": "revealed"}, headers=_h(rw_key))
+    revealed = client.get(f"/website/events/{slug}").json()
+    assert revealed["flagship"] is True and revealed["flagship_state"] == "revealed"
+    assert revealed["description"] == "TOP SECRET 48h hackathon."
+    assert revealed["venue"] == "The Bunker"
+    assert revealed["ticket_url"] == "https://tickets.example/duckshot"
+    assert [s["name"] for s in revealed["speakers"]] == ["Mystery Guest"]
+
+    # Public funnel: notify signup → ok, and a re-submit is idempotent (never 500).
+    assert client.post(f"/website/flagship/{slug}/signup",
+                       json={"kind": "notify", "email": "fan@example.com"}).json() == {"ok": True}
+    assert client.post(f"/website/flagship/{slug}/signup",
+                       json={"kind": "notify", "email": "fan@example.com"}).json() == {"ok": True}
+
+    # Validation: bad kind → 422; unknown slug → 404.
+    assert client.post(f"/website/flagship/{slug}/signup",
+                       json={"kind": "bogus", "email": "x@y.com"}).status_code == 422
+    assert client.post("/website/flagship/not-a-real-event/signup",
+                       json={"kind": "notify", "email": "x@y.com"}).status_code == 404
+
+    # Sponsor signup → ok AND seeds the existing sponsor-lead pipeline.
+    assert client.post(f"/website/flagship/{slug}/signup",
+                       json={"kind": "sponsor", "email": "ceo@acme.com",
+                             "company": "ACME", "message": "We're in."}).json() == {"ok": True}
+    leads = client.get("/sponsor-leads", headers=_h(rw_key)).json()
+    seeded = next(l for l in leads if l["email"] == "ceo@acme.com")
+    assert seeded["company"] == "ACME" and seeded["source"] == "flagship"
+
+
+def test_flagship_signup_requires_flagship_event(client, rw_key):
+    """A non-flagship event has no public funnel — its slug 404s on signup."""
+    client.post("/events-api", json={"name": "Plain Meetup", "start_date": "2099-09-01",
+                                     "is_public": True}, headers=_h(rw_key))
+    feed = client.get("/website/events").json()
+    slug = next(e["slug"] for e in feed if e["title"] == "Plain Meetup")
+    assert client.post(f"/website/flagship/{slug}/signup",
+                       json={"kind": "notify", "email": "x@y.com"}).status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Event preview links ("see it before publishing")
+# --------------------------------------------------------------------------- #
+
+def test_event_preview_token_roundtrip():
+    from app.features.website import preview
+
+    tok = preview.make_preview_token(42)
+    assert preview.verify_preview_token(tok) == 42
+    # Tampered signature → rejected.
+    flipped = tok[:-1] + ("A" if tok[-1] != "A" else "B")
+    assert preview.verify_preview_token(flipped) is None
+    # Re-pointed event id (keeping the original exp+sig) → rejected.
+    assert preview.verify_preview_token("999." + tok.split(".", 1)[1]) is None
+    # Malformed / empty → None, never raises.
+    assert preview.verify_preview_token("garbage") is None
+    assert preview.verify_preview_token("") is None
+    # Past its expiry → None.
+    assert preview.verify_preview_token(preview.make_preview_token(42, ttl=-10)) is None
+
+
+def test_event_preview_endpoint_serves_draft(client, rw_key, ro_key):
+    """A draft event is hidden from the public feed but visible via a preview link."""
+    ev = client.post("/events-api", json={"name": "Secret Draft", "start_date": "2099-10-01"},
+                     headers=_h(rw_key)).json()
+    eid = ev["id"]
+    # Draft (is_public defaults False) → absent from the public events feed.
+    feed = client.get("/website/events").json()
+    assert all(e["title"] != "Secret Draft" for e in feed)
+
+    # The dashboard mints a preview link (read scope is enough)…
+    link = client.get(f"/events-api/{eid}/preview-link", headers=_h(ro_key))
+    assert link.status_code == 200
+    path = link.json()["path"]
+    assert path.startswith("/events/preview/")
+
+    # …and the token renders the full draft via the public token-gated feed.
+    got = client.get(f"/website{path}")
+    assert got.status_code == 200
+    assert got.json()["title"] == "Secret Draft"
+
+    # A bad token 404s — drafts never leak without a valid link.
+    assert client.get("/website/events/preview/not-a-token").status_code == 404
+
+
+def test_event_preview_link_unknown_event_404(client, rw_key):
+    assert client.get("/events-api/999999/preview-link", headers=_h(rw_key)).status_code == 404

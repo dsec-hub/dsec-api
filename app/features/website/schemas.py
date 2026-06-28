@@ -37,6 +37,7 @@ class PublicPerson(BaseModel):
     email, student id, or status.
     """
 
+    slug: str               # stable URL key for /team/{slug}, derived from name
     name: str
     role: str | None        # role_title, e.g. "President"
     type: str | None        # Exec / Committee Lead / Committee Member / ...
@@ -48,6 +49,36 @@ class PublicPerson(BaseModel):
     linkedin: str | None
     github: str | None
     website: str | None
+
+
+class PublicPersonEvent(BaseModel):
+    """A published event this person leads — a clickable byline on their profile."""
+
+    slug: str
+    title: str
+    date: str | None        # ISO YYYY-MM-DD (start)
+    upcoming: bool
+
+
+class PublicPersonProject(BaseModel):
+    """A published project this person leads — a clickable byline on their profile."""
+
+    slug: str | None
+    title: str
+    summary: str | None
+
+
+class PublicPersonDetail(PublicPerson):
+    """One team member's full public profile page (/website/team/{slug}).
+
+    Extends the grid card with the events and projects they lead (published only),
+    so the website can render a real per-person profile section. Discord is
+    included here (not on the grid card) so members can link it from their page.
+    """
+
+    discord: str | None
+    led_events: list[PublicPersonEvent] = []
+    led_projects: list[PublicPersonProject] = []
 
 
 class PublicProject(BaseModel):
@@ -150,6 +181,32 @@ class PublicEvent(BaseModel):
     sponsors: list[PublicEventSponsor] = []
     partners: list[PublicEventPartner] = []
     related_events: list[PublicRelatedEvent] = []
+    # Flagship marketing event (see the FLAGSHIP contract). When this is a
+    # flagship event still in `teaser` state, the secret specifics above
+    # (description, venue, ticket_url, ticket_tiers, speakers, sponsors,
+    # partners) are NULLED OUT in this payload so they can't be scraped before
+    # reveal — only the title, type, dates, image and these flagship_* fields
+    # remain. Non-flagship events are unaffected (flagship=False, rest null).
+    flagship: bool = False
+    flagship_theme: str | None = None       # arena|blueprint|nightrun
+    flagship_state: str | None = None       # teaser|revealed
+    flagship_teaser_title: str | None = None
+    flagship_teaser_body: str | None = None
+    flagship_reveal_at: str | None = None   # ISO 8601 countdown target
+
+
+class FlagshipSignupIn(BaseModel):
+    """A public submission from a flagship event's teaser-page funnel.
+
+    `kind` is `notify` (reveal-email interest) or `sponsor` (a company offering
+    to back the event). `company`/`message` are only meaningful for `sponsor`.
+    """
+
+    kind: str               # notify|sponsor
+    email: str
+    name: str | None = None
+    company: str | None = None   # sponsor only
+    message: str | None = None   # sponsor only
 
 
 class PublicLink(BaseModel):

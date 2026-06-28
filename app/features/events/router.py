@@ -9,6 +9,7 @@ from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
 from app.core.net import client_ip
 from app.db import get_db
+from app.features.website.preview import make_preview_token
 from app.models import APIKey
 
 from . import relations, service
@@ -40,6 +41,7 @@ def list_events(
     trimester: str | None = None,
     event_lead_id: int | None = None,
     is_public: bool | None = None,
+    is_flagship: bool | None = None,
     include_archived: bool = False,
     limit: int = Query(100, le=200),
     offset: int = 0,
@@ -50,7 +52,7 @@ def list_events(
     rows = service.list_events(
         db, archived=include_archived, status=status, type=type,
         trimester=trimester, event_lead_id=event_lead_id, is_public=is_public,
-        limit=limit, offset=offset,
+        is_flagship=is_flagship, limit=limit, offset=offset,
     )
     return [EventOut.model_validate(r) for r in rows]
 
@@ -67,6 +69,29 @@ def get_event(
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
     return EventOut.model_validate(event)
+
+
+@router.get("/{event_id}/preview-link")
+def event_preview_link(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> dict:
+    """Mint an unguessable, time-limited link to preview this event on the public
+    site (published OR draft) — the dashboard's "Preview"/"View event" button.
+
+    The token is stateless (an HMAC; see ``website.preview``) so there is nothing
+    to store or revoke — it simply expires. Returns the site-relative ``path`` the
+    dashboard joins onto the website origin; needs only the `read` scope since it
+    grants no more than viewing the event's own public representation.
+    """
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    event = service.get_event(db, event_id)
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+    token = make_preview_token(event.id)
+    return {"token": token, "path": f"/events/preview/{token}"}
 
 
 @router.post("", response_model=EventOut, status_code=status.HTTP_201_CREATED)

@@ -236,6 +236,33 @@ class Event(Base):
         Boolean, default=False, server_default=text("false"), index=True
     )
 
+    # --- Flagship marketing event (marquee hackathon / big collab) ------------
+    # A flagship event gets a unique dsec-website template with TWO states:
+    #   * teaser   — secret: idea teased, real specifics hidden; shows a
+    #                countdown + email/sponsor funnel + share.
+    #   * revealed — declassified to the full rich event page (one switch flip).
+    # `is_flagship` is the flag (mirrors is_public's style); `flagship_theme`
+    # picks the template; `flagship_state` is the secret→reveal switch. The
+    # public /website feed NULLs out the real specifics while in `teaser` state
+    # (see features/website) so they can't be scraped before reveal. Inbound
+    # interest from the teaser funnel lands in `flagship_signup`.
+    is_flagship: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+    flagship_theme: Mapped[str] = mapped_column(
+        String(16), default="arena", server_default=text("'arena'")
+    )  # arena|blueprint|nightrun
+    flagship_state: Mapped[str] = mapped_column(
+        String(16), default="teaser", server_default=text("'teaser'")
+    )  # teaser|revealed
+    # Teaser-state copy (secret headline + Markdown blurb), shown only while teasing.
+    flagship_teaser_title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    flagship_teaser_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Countdown target for the teaser page; falls back to start_date if null.
+    flagship_reveal_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
@@ -1168,6 +1195,45 @@ class EventConnection(Base):
 
     __table_args__ = (
         UniqueConstraint("event_a_id", "event_b_id", name="uq_event_connection"),
+    )
+
+
+class FlagshipSignup(Base):
+    """An inbound signup from a flagship event's public teaser-page funnel.
+
+    The teaser page on dsec-website captures two kinds of interest while the
+    event is still secret:
+      * `notify`  — a fan who wants the reveal email (name + email).
+      * `sponsor` — a company offering to back the event (+ company + message).
+
+    Written by the public, no-auth `POST /website/flagship/{slug}/signup`; the
+    exec works these in the dashboard. The UNIQUE (event_id, kind, email) makes
+    re-submits idempotent so the public form never errors on a duplicate
+    (insert-or-ignore). For `sponsor` signups the endpoint ALSO best-effort
+    drops a `SponsorLead` into the existing pipeline — this row stays the
+    funnel's own source of truth regardless.
+    """
+
+    __tablename__ = "flagship_signup"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))  # notify|sponsor
+    email: Mapped[str] = mapped_column(String(320))
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    company: Mapped[str | None] = mapped_column(String(256), nullable=True)  # sponsor only
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)  # sponsor only
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)  # e.g. "website"
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), index=True
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("event_id", "kind", "email", name="uq_flagship_signup"),
     )
 
 

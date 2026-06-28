@@ -34,6 +34,14 @@ class EventBase(BaseModel):
     grant_aud: float | None = None
     # Draft (False) vs published (True). Published events show on the public site.
     is_public: bool | None = None
+    # Flagship marketing event: the flag, the template theme, the secret→reveal
+    # state, and the teaser-state copy/countdown. See models.Event / the contract.
+    is_flagship: bool | None = None
+    flagship_theme: str | None = None       # arena|blueprint|nightrun
+    flagship_state: str | None = None       # teaser|revealed
+    flagship_teaser_title: str | None = None
+    flagship_teaser_body: str | None = None
+    flagship_reveal_at: datetime | None = None
     # Additional owners beyond `event_lead_id` (the primary lead). Full replace on
     # PATCH; omit to leave unchanged, [] to clear. The primary is never duplicated.
     co_owner_ids: list[int] | None = None
@@ -77,6 +85,12 @@ class EventOut(BaseModel):
     partner_org: str | None
     related_sponsor_id: int | None
     is_public: bool
+    is_flagship: bool
+    flagship_theme: str | None
+    flagship_state: str | None
+    flagship_teaser_title: str | None
+    flagship_teaser_body: str | None
+    flagship_reveal_at: datetime | None
     co_owner_ids: list[int] = []
     # Post-event review form (Tally) — set by the reviews feature, read-only here.
     review_form_id: str | None

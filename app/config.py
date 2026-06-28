@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     # staff scan it to confirm the member (name + active status + face photo).
     MEMBER_VERIFY_BASE_URL: str = "https://app.dsec.club/verify"
 
+    # --- Event preview links ("see it before publishing") ---
+    # The committee dashboard can open a *draft* event on the public marketing
+    # site before it goes live, via an unguessable, time-limited signed link (no
+    # login). dsec-api mints + verifies the token — an HMAC over the event id +
+    # expiry — so it needs no DB column (stateless), can't be forged or
+    # enumerated, and stops working after EVENT_PREVIEW_TTL. Blank reuses
+    # AGENT_SECRET (already required non-default in prod) so there is no NEW
+    # required secret; set it to rotate every outstanding preview link at once.
+    EVENT_PREVIEW_SECRET: str = ""
+    EVENT_PREVIEW_TTL: int = 7 * 24 * 3600  # signed-link lifetime (7 days)
+
     # --- Pre-meeting agenda share links ---
     # When a meeting agenda is shared, the API stamps a stable, unguessable token
     # and returns a public read-only URL of the form <base>/<token>. The view

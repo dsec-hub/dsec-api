@@ -290,13 +290,23 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
                  dusa_required: bool | None = None, dusa_deadline: str | None = None,
                  dusa_submission_status: str | None = None, support_types: list[str] | None = None,
                  partner_org: str | None = None, related_sponsor_id: int | None = None,
-                 is_public: bool | None = None, co_owner_ids: list[int] | None = None) -> dict:
+                 is_public: bool | None = None, is_flagship: bool | None = None,
+                 flagship_theme: str | None = None, flagship_state: str | None = None,
+                 flagship_teaser_title: str | None = None, flagship_teaser_body: str | None = None,
+                 flagship_reveal_at: str | None = None,
+                 co_owner_ids: list[int] | None = None) -> dict:
     """Create an event. Dates are ISO YYYY-MM-DD. `ticket_tiers` is tiered pricing:
     a list of {"label": str, "price": number | null} (price 0 = free, null = unset).
     `description` is free-form Markdown shown on the public website. New events are
     drafts — set is_public=true to publish to the public website. `support_types`
     + `partner_org` capture an in-kind/partner-run collaboration (no money).
-    `event_lead_id` is the primary lead; `co_owner_ids` adds extra leads/owners."""
+    `event_lead_id` is the primary lead; `co_owner_ids` adds extra leads/owners.
+    Set is_flagship=true to make this a marquee marketing event: `flagship_theme`
+    picks the dsec-website template (arena|blueprint|nightrun), `flagship_state`
+    is the secret→reveal switch (teaser|revealed — teaser hides the real
+    specifics on the public site), `flagship_teaser_title`/`flagship_teaser_body`
+    are the secret-state copy, and `flagship_reveal_at` (ISO 8601) is the
+    countdown target."""
     require_scope("write")
     data = _coerce(EventCreate, _data(name=name, type=type, status=status, start_date=start_date,
                                       end_date=end_date, trimester=trimester, format=format,
@@ -309,6 +319,11 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
                                       dusa_submission_status=dusa_submission_status,
                                       support_types=support_types, partner_org=partner_org,
                                       related_sponsor_id=related_sponsor_id, is_public=is_public,
+                                      is_flagship=is_flagship, flagship_theme=flagship_theme,
+                                      flagship_state=flagship_state,
+                                      flagship_teaser_title=flagship_teaser_title,
+                                      flagship_teaser_body=flagship_teaser_body,
+                                      flagship_reveal_at=flagship_reveal_at,
                                       co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(EventOut, events_service.create_event(db, data))
@@ -326,13 +341,22 @@ def update_event(event_id: int, name: str | None = None, type: str | None = None
                  dusa_required: bool | None = None, dusa_deadline: str | None = None,
                  dusa_submission_status: str | None = None, support_types: list[str] | None = None,
                  partner_org: str | None = None, related_sponsor_id: int | None = None,
-                 is_public: bool | None = None, co_owner_ids: list[int] | None = None) -> dict:
+                 is_public: bool | None = None, is_flagship: bool | None = None,
+                 flagship_theme: str | None = None, flagship_state: str | None = None,
+                 flagship_teaser_title: str | None = None, flagship_teaser_body: str | None = None,
+                 flagship_reveal_at: str | None = None,
+                 co_owner_ids: list[int] | None = None) -> dict:
     """Update an event (only the fields you pass change). `ticket_tiers` is tiered
     pricing: a list of {"label": str, "price": number | null} (price 0 = free).
     `description` is free-form Markdown shown on the public website. Set
     is_public=true to publish (or false to unpublish/return to draft).
     `co_owner_ids` replaces the extra leads/owners beyond the primary
-    `event_lead_id` (pass [] to clear them; omit to leave unchanged)."""
+    `event_lead_id` (pass [] to clear them; omit to leave unchanged). For a
+    flagship marketing event, flip `flagship_state` to 'revealed' to declassify
+    the teaser page to the full event page (or 'teaser' to keep specifics
+    hidden); `flagship_theme` (arena|blueprint|nightrun), the teaser copy
+    (`flagship_teaser_title`/`flagship_teaser_body`) and the countdown
+    `flagship_reveal_at` (ISO 8601) are all editable here too."""
     require_scope("write")
     data = _coerce(EventUpdate, _data(name=name, type=type, status=status, start_date=start_date,
                                       end_date=end_date, trimester=trimester, format=format,
@@ -345,6 +369,11 @@ def update_event(event_id: int, name: str | None = None, type: str | None = None
                                       dusa_submission_status=dusa_submission_status,
                                       support_types=support_types, partner_org=partner_org,
                                       related_sponsor_id=related_sponsor_id, is_public=is_public,
+                                      is_flagship=is_flagship, flagship_theme=flagship_theme,
+                                      flagship_state=flagship_state,
+                                      flagship_teaser_title=flagship_teaser_title,
+                                      flagship_teaser_body=flagship_teaser_body,
+                                      flagship_reveal_at=flagship_reveal_at,
                                       co_owner_ids=co_owner_ids))
     with SessionLocal() as db:
         return _dump(EventOut, _require(events_service.update_event(db, event_id, data), "event not found"))

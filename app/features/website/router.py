@@ -13,6 +13,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.ratelimit import limiter
@@ -21,6 +22,8 @@ from app.db import get_db
 from app.features.links import service as links_service
 from app.features.media import service as media_service
 from app.features.projects import service as projects_service
+from app.features.sponsor_leads import service as sponsor_leads_service
+from app.features.website.preview import verify_preview_token
 from app.models import (
     Event,
     EventConnection,
@@ -28,6 +31,7 @@ from app.models import (
     EventSpeaker,
     EventSponsor,
     FinanceReport,
+    FlagshipSignup,
     MediaAsset,
     Member,
     Partner,
@@ -38,6 +42,7 @@ from app.models import (
 )
 
 from .schemas import (
+    FlagshipSignupIn,
     PublicEvent,
     PublicEventPartner,
     PublicEventSponsor,
@@ -48,6 +53,9 @@ from .schemas import (
     PublicMedia,
     PublicPartner,
     PublicPerson,
+    PublicPersonDetail,
+    PublicPersonEvent,
+    PublicPersonProject,
     PublicProject,
     PublicRelatedEvent,
     PublicSpeaker,
@@ -325,23 +333,55 @@ def _public_event(
     # An event auto-completes once its start date passes; its ticketing (link +
     # prices) is only meaningful while upcoming, so hide it for past events.
     upcoming = bool(e.start_date and e.start_date >= today)
+    description = e.description
+    venue = e.venue
+    ticket_url = e.ticket_url if upcoming else None
+    ticket_tiers = (e.ticket_tiers or None) if upcoming else None
+    speakers = speakers or []
+    sponsors = sponsors or []
+    partners = partners or []
+    # Flagship secrecy gating: a flagship event still in `teaser` state must NULL
+    # OUT its real specifics in the public payload so they can't be scraped before
+    # the committee flips it to `revealed`. Only the safe shell (title, type,
+    # dates, image) + the flagship_* fields remain. A non-flagship event — or a
+    # revealed flagship — exposes everything as normal.
+    flagship = bool(getattr(e, "is_flagship", False))
+    state = (e.flagship_state or "teaser") if flagship else None
+    if flagship and state == "teaser":
+        description = None
+        venue = None
+        ticket_url = None
+        ticket_tiers = None
+        speakers = []
+        sponsors = []
+        partners = []
     return PublicEvent(
         slug=_event_slug(e),
         title=e.name, type=e.type, status=e.status,
-        description=e.description,
+        description=description,
         date=e.start_date.isoformat() if e.start_date else None,
         end_date=e.end_date.isoformat() if e.end_date else None,
-        venue=e.venue, format=e.format,
-        ticket_url=e.ticket_url if upcoming else None,
-        ticket_tiers=(e.ticket_tiers or None) if upcoming else None,
+        venue=venue, format=e.format,
+        ticket_url=ticket_url,
+        ticket_tiers=ticket_tiers,
         food_provided=bool(e.food_provided),
         upcoming=upcoming,
         image=image, download=download, media=media,
         lead=lead,
-        speakers=speakers or [],
-        sponsors=sponsors or [],
-        partners=partners or [],
+        speakers=speakers,
+        sponsors=sponsors,
+        partners=partners,
         related_events=related_events or [],
+        flagship=flagship,
+        flagship_theme=e.flagship_theme if flagship else None,
+        flagship_state=state,
+        flagship_teaser_title=e.flagship_teaser_title if flagship else None,
+        flagship_teaser_body=e.flagship_teaser_body if flagship else None,
+        flagship_reveal_at=(
+            e.flagship_reveal_at.isoformat()
+            if flagship and e.flagship_reveal_at
+            else None
+        ),
     )
 
 
@@ -402,6 +442,124 @@ def public_event(slug: str, request: Request, db: Session = Depends(get_db)) -> 
         partners=_event_partners(db, match.id),
         related_events=_related_events(db, match, today=today),
     )
+
+
+@router.get("/events/preview/{token}", response_model=PublicEvent)
+def public_event_preview(
+    token: str, request: Request, db: Session = Depends(get_db)
+) -> PublicEvent:
+    """Render ONE event — published OR draft — from a signed preview token.
+
+    Powers the committee's "preview before publishing" link: the dashboard mints
+    an unguessable, time-limited token (see ``preview.make_preview_token``) and
+    points dsec-website at ``/events/preview/<token>``, which renders the exact
+    public layout the event will have once live. The payload is identical to the
+    normal detail endpoint (same flagship-secrecy gating), so a preview is truly
+    WYSIWYG. A bad/expired token or a missing/archived event returns 404 without
+    revealing which — drafts never leak to anyone without the link.
+    """
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    event_id = verify_preview_token(token)
+    if event_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+    today = date.today()
+    e = db.execute(
+        select(Event).where(Event.id == event_id, Event.archived.is_(False))
+    ).scalar_one_or_none()
+    if e is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+    assets = media_service.list_media(db, entity_type="event", entity_id=e.id)
+    lead = _leads_map(db, [e.event_lead_id]).get(e.event_lead_id)
+    return _public_event(
+        e, assets, today=today, lead=lead,
+        speakers=_event_speakers(db, e.id),
+        sponsors=_event_sponsors(db, e.id),
+        partners=_event_partners(db, e.id),
+        related_events=_related_events(db, e, today=today),
+    )
+
+
+@router.post("/flagship/{slug}/signup")
+def flagship_signup(
+    slug: str,
+    body: FlagshipSignupIn,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Public, no-auth funnel sink for a flagship event's teaser page.
+
+    Captures `notify` (reveal-email) and `sponsor` (backer) interest while an
+    event is still secret. Resolves the event by the SAME computed slug the
+    public feed uses, and only for an actual flagship event. The insert is
+    idempotent on (event_id, kind, email) so a re-submit is a no-op success —
+    it NEVER 500s on a duplicate. For `sponsor` signups we ALSO best-effort drop
+    a lead into the existing sponsor-lead pipeline (never blocking the funnel on
+    it). Always returns {"ok": true}.
+    """
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    kind = (body.kind or "").strip().lower()
+    if kind not in {"notify", "sponsor"}:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "kind must be 'notify' or 'sponsor'"
+        )
+    email = (body.email or "").strip()
+    if not email or "@" not in email:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "valid email required")
+
+    # Resolve via the shared slug (handles date-TBA flagship events too — those
+    # have no start_date, so we don't filter on it the way the feed does).
+    rows = db.execute(
+        select(Event).where(
+            Event.archived.is_(False),
+            Event.is_flagship.is_(True),
+        )
+    ).scalars().all()
+    event = next((e for e in rows if _event_slug(e) == slug), None)
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "flagship event not found")
+
+    signup = FlagshipSignup(
+        event_id=event.id,
+        kind=kind,
+        email=email,
+        name=(body.name or None),
+        company=(body.company or None),
+        message=(body.message or None),
+        source="website",
+    )
+    db.add(signup)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Duplicate (event_id, kind, email) — already captured. Roll back and
+        # report success so the public form is idempotent, never an error.
+        db.rollback()
+        return {"ok": True}
+
+    # Best-effort: mirror a sponsor signup into the existing sponsor-lead pipeline
+    # so External Affairs works it alongside every other inbound enquiry. The
+    # flagship_signup row above stays the funnel's own source of truth, so any
+    # failure here is swallowed — it must never block/break the public form.
+    if kind == "sponsor":
+        try:
+            sponsor_leads_service.create_lead(
+                db,
+                {
+                    "source": "flagship",
+                    "name": body.name or None,
+                    "email": email,
+                    "company": body.company or None,
+                    "message": (
+                        f"[Flagship: {event.name}] {body.message}"
+                        if body.message
+                        else f"Sponsor interest in flagship event: {event.name}"
+                    ),
+                },
+            )
+        except Exception:  # noqa: BLE001 — lead mirror is strictly best-effort
+            db.rollback()
+
+    return {"ok": True}
 
 
 @router.get("/sponsor-packages", response_model=list[PublicSponsorPackage])
@@ -493,23 +651,86 @@ def public_linktree(request: Request, db: Session = Depends(get_db)) -> PublicLi
     )
 
 
+def _person_slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "member"
+
+
+def _published_team(db: Session) -> list[Person]:
+    """The published roster (show_on_website), in public grid order. Shared by the
+    team list feed and the per-person detail page so they agree on slugs."""
+    return list(
+        db.execute(
+            select(Person)
+            .where(Person.archived.is_(False), Person.show_on_website.is_(True))
+            .order_by(Person.display_order.asc(), Person.name.asc())
+        ).scalars().all()
+    )
+
+
+def _team_slugs(rows: list[Person]) -> dict[int, str]:
+    """Assign each published person a stable, unique URL slug from their name.
+
+    Same-name people get a `-2`, `-3` … suffix in roster order, so the list feed
+    and the `/team/{slug}` detail endpoint always resolve to the same person.
+    """
+    seen: dict[str, int] = {}
+    out: dict[int, str] = {}
+    for p in rows:
+        base = _person_slug(p.name)
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        out[p.id] = base if n == 1 else f"{base}-{n}"
+    return out
+
+
+def _person_led_events(db: Session, person_id: int, *, today: date) -> list[PublicPersonEvent]:
+    """Published, dated events this person leads (primary lead) — newest first."""
+    rows = db.execute(
+        select(Event).where(
+            Event.event_lead_id == person_id,
+            Event.archived.is_(False),
+            Event.is_public.is_(True),
+            Event.start_date.is_not(None),
+        ).order_by(Event.start_date.desc())
+    ).scalars().all()
+    return [
+        PublicPersonEvent(
+            slug=_event_slug(e),
+            title=e.name,
+            date=e.start_date.isoformat() if e.start_date else None,
+            upcoming=bool(e.start_date and e.start_date >= today),
+        )
+        for e in rows
+    ]
+
+
+def _person_led_projects(db: Session, person_id: int) -> list[PublicPersonProject]:
+    """Published projects this person leads (primary lead), A–Z."""
+    rows = db.execute(
+        select(Project).where(
+            Project.lead_id == person_id,
+            Project.archived.is_(False),
+            Project.is_public.is_(True),
+        ).order_by(Project.name.asc())
+    ).scalars().all()
+    return [PublicPersonProject(slug=p.slug, title=p.name, summary=p.summary) for p in rows]
+
+
 @router.get("/team", response_model=list[PublicPerson])
 def public_team(request: Request, db: Session = Depends(get_db)) -> list[PublicPerson]:
     """Published committee/team members for the public About page.
 
     Only people the exec has opted in (`show_on_website`) are returned, ordered
-    by `display_order` then name, each with their uploaded headshot. Returns an
-    empty list when none are published so dsec-website falls back to its static
-    roster — graceful degradation, never a failure.
+    by `display_order` then name, each with their uploaded headshot and a stable
+    `slug` linking to their `/team/{slug}` profile page. Returns an empty list
+    when none are published so dsec-website falls back to its static roster —
+    graceful degradation, never a failure.
     """
     limiter.check_request(db, key_id=None, ip=client_ip(request))
-    rows = db.execute(
-        select(Person)
-        .where(Person.archived.is_(False), Person.show_on_website.is_(True))
-        .order_by(Person.display_order.asc(), Person.name.asc())
-    ).scalars().all()
+    rows = _published_team(db)
     if not rows:
         return []
+    slugs = _team_slugs(rows)
     photos = media_service.list_media_for(
         db, entity_type="person", entity_ids=[p.id for p in rows]
     )
@@ -518,6 +739,7 @@ def public_team(request: Request, db: Session = Depends(get_db)) -> list[PublicP
         webp, png = _role_media(photos.get(p.id, []), "photo")
         out.append(
             PublicPerson(
+                slug=slugs[p.id],
                 name=p.name, role=p.role_title, type=p.type, committee=p.committee,
                 bio=p.bio, photo=webp, photo_png=png,
                 instagram=p.instagram, linkedin=p.linkedin,
@@ -525,6 +747,34 @@ def public_team(request: Request, db: Session = Depends(get_db)) -> list[PublicP
             )
         )
     return out
+
+
+@router.get("/team/{slug}", response_model=PublicPersonDetail)
+def public_team_member(
+    slug: str, request: Request, db: Session = Depends(get_db)
+) -> PublicPersonDetail:
+    """One published team member's full profile, with the events and projects
+    they lead (published only). 404 for anyone not opted in to the public site —
+    the slug must resolve within the same published roster the grid uses."""
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    rows = _published_team(db)
+    slugs = _team_slugs(rows)
+    match = next((p for p in rows if slugs[p.id] == slug), None)
+    if match is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "team member not found")
+    webp, png = _role_media(
+        media_service.list_media(db, entity_type="person", entity_id=match.id), "photo"
+    )
+    today = date.today()
+    return PublicPersonDetail(
+        slug=slug,
+        name=match.name, role=match.role_title, type=match.type,
+        committee=match.committee, bio=match.bio, photo=webp, photo_png=png,
+        instagram=match.instagram, linkedin=match.linkedin,
+        github=match.github, website=match.website, discord=match.discord,
+        led_events=_person_led_events(db, match.id, today=today),
+        led_projects=_person_led_projects(db, match.id),
+    )
 
 
 @router.get("/stats", response_model=SiteStats)

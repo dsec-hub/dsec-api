@@ -95,9 +95,10 @@ CATALOG: tuple[Tool, ...] = (
     Tool("get_event", "read", "Events",
          "Get one event by id (full detail)."),
     Tool("create_event", "write", "Events",
-         "Create an event. It stays a private draft until is_public=true."),
+         "Create an event. It stays a private draft until is_public=true. Set "
+         "is_flagship=true for a marquee marketing event (teaser→reveal page)."),
     Tool("update_event", "write", "Events",
-         "Update fields on an existing event."),
+         "Update fields on an existing event (incl. flagship_state teaser→revealed)."),
     Tool("archive_event", "write", "Events",
          "Soft-delete (archive) an event. Confirm with the human first."),
     Tool("create_event_review_form", "write", "Events",

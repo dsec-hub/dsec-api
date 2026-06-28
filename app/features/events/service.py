@@ -32,6 +32,7 @@ def list_events(
     trimester: str | None = None,
     event_lead_id: int | None = None,
     is_public: bool | None = None,
+    is_flagship: bool | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Event]:
@@ -40,6 +41,8 @@ def list_events(
         stmt = stmt.where(Event.archived.is_(False))
     if is_public is not None:
         stmt = stmt.where(Event.is_public.is_(is_public))
+    if is_flagship is not None:
+        stmt = stmt.where(Event.is_flagship.is_(is_flagship))
     if status:
         stmt = stmt.where(Event.status == status)
     if type:
