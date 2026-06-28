@@ -39,6 +39,7 @@ from app.features.mcp.auth import MCPAuthMiddleware
 from app.features.mcp.router import router as mcp_guide_router
 from app.features.mcp.server import mcp, mcp_app
 from app.features.oauth.router import router as oauth_router
+from app.features.links.router import router as links_router
 from app.features.meetings.router import router as meetings_router
 from app.features.members.router import router as members_router
 from app.features.partners.router import router as partners_router
@@ -110,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(sponsor_packages_router, prefix="/sponsor-packages", tags=["sponsor-packages"])
     app.include_router(sponsor_leads_router, prefix="/sponsor-leads", tags=["sponsor-leads"])
     app.include_router(partners_router, prefix="/partners", tags=["partners"])
+    app.include_router(links_router, prefix="/links", tags=["links"])
     app.include_router(finance_router, prefix="/finance", tags=["finance"])
     app.include_router(members_router, prefix="/members", tags=["members"])
     app.include_router(website_router, prefix="/website", tags=["website"])

@@ -146,6 +146,24 @@ CATALOG: tuple[Tool, ...] = (
     Tool("archive_partner", "write", "Partners",
          "Soft-delete (archive) a partner org. Confirm with the human first."),
 
+    # ---- Link tree -------------------------------------------------------- #
+    Tool("list_links", "read", "Link tree",
+         "List the buttons on the public link-tree page (incl. hidden), in display order."),
+    Tool("get_link", "read", "Link tree",
+         "Get one link-tree button by id."),
+    Tool("create_link", "write", "Link tree",
+         "Add a link-tree button (title, url, optional emoji icon, accent, subtitle)."),
+    Tool("update_link", "write", "Link tree",
+         "Update a link-tree button (only the fields you pass change)."),
+    Tool("archive_link", "write", "Link tree",
+         "Soft-delete (archive) a link-tree button. Confirm with the human first."),
+    Tool("reorder_links", "write", "Link tree",
+         "Reorder the link-tree buttons by passing their ids in the new top-to-bottom order."),
+    Tool("get_link_profile", "read", "Link tree",
+         "Get the link-tree page header (title, tagline, mascot)."),
+    Tool("update_link_profile", "write", "Link tree",
+         "Update the link-tree page header (title, tagline, mascot)."),
+
     # ---- Projects --------------------------------------------------------- #
     Tool("list_projects", "read", "Projects",
          "List community projects."),

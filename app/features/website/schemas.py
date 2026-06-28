@@ -152,6 +152,37 @@ class PublicEvent(BaseModel):
     related_events: list[PublicRelatedEvent] = []
 
 
+class PublicLink(BaseModel):
+    """One tappable button on the public, chromeless `/links` link-tree page.
+
+    Only ever returned for visible, non-archived links. `accent` (one of the 8
+    brand accents) is null when the committee left it on "auto" — the website
+    then cycles an accent by visible position.
+    """
+
+    title: str
+    subtitle: str | None
+    url: str
+    icon: str | None         # a single emoji, e.g. "🎮" (null = none)
+    accent: str | None       # brand accent name; null = auto-cycle by position
+    display_order: int
+
+
+class PublicLinkProfile(BaseModel):
+    """The link-tree page header (the singleton link_profile row id=1)."""
+
+    title: str
+    tagline: str | None
+    mascot: str | None       # a PixelDuck sprite name (public/pixel/<mascot>.webp)
+
+
+class PublicLinkTree(BaseModel):
+    """The full public link-tree feed: the header plus the visible link stack."""
+
+    profile: PublicLinkProfile
+    links: list[PublicLink]
+
+
 class SiteStats(BaseModel):
     members: int
     dusa_members: int

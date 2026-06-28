@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.ratelimit import limiter
 from app.core.net import client_ip
 from app.db import get_db
+from app.features.links import service as links_service
 from app.features.media import service as media_service
 from app.features.projects import service as projects_service
 from app.models import (
@@ -41,6 +42,9 @@ from .schemas import (
     PublicEventPartner,
     PublicEventSponsor,
     PublicLead,
+    PublicLink,
+    PublicLinkProfile,
+    PublicLinkTree,
     PublicMedia,
     PublicPartner,
     PublicPerson,
@@ -468,6 +472,25 @@ def public_partners(request: Request, db: Session = Depends(get_db)) -> list[Pub
             PublicPartner(name=p.name, website=p.website, logo=webp, logo_png=png)
         )
     return out
+
+
+@router.get("/linktree", response_model=PublicLinkTree)
+def public_linktree(request: Request, db: Session = Depends(get_db)) -> PublicLinkTree:
+    """The public DSEC link-tree feed: the page header plus the visible link stack.
+
+    Only visible, non-archived links are returned, ordered by display_order then
+    created_at (the same order the dashboard shows). The profile is the singleton
+    header (a default object if no row has been saved yet) so the page is never
+    empty — dsec-website renders its own hardcoded fallback only when the API is
+    unreachable.
+    """
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    profile = links_service.get_profile(db)
+    links = links_service.list_links(db, include_hidden=False, archived=False)
+    return PublicLinkTree(
+        profile=PublicLinkProfile.model_validate(profile, from_attributes=True),
+        links=[PublicLink.model_validate(link, from_attributes=True) for link in links],
+    )
 
 
 @router.get("/team", response_model=list[PublicPerson])

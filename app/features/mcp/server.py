@@ -46,6 +46,14 @@ from app.features.media.schemas import MediaOut
 from app.features.meetings import service as meetings_service
 from app.features.meetings.notes import generate_meeting_notes as _gen_notes
 from app.features.meetings.schemas import MeetingCreate, MeetingOut, MeetingUpdate
+from app.features.links import service as links_service
+from app.features.links.schemas import (
+    LinkCreate,
+    LinkOut,
+    LinkProfileOut,
+    LinkProfileUpdate,
+    LinkUpdate,
+)
 from app.features.members import service as members_service
 from app.features.members.schemas import MemberOut, MemberTrendPoint
 from app.features.partners import service as partners_service
@@ -610,6 +618,105 @@ def archive_partner(partner_id: int) -> dict:
     with SessionLocal() as db:
         return _dump(PartnerOut, _require(partners_service.archive_partner(db, partner_id),
                                           "partner not found"))
+
+
+# --------------------------------------------------------------------------- #
+# link tree (the public /links page: a profile header + a stack of buttons)
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def list_links(include_hidden: bool = True, include_archived: bool = False,
+               limit: int = 200) -> list[dict]:
+    """List the buttons on the public link-tree page, in display order
+    (display_order, then created_at). `include_hidden=False` drops links not
+    currently shown publicly; `include_archived=True` includes soft-deleted ones."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(
+            LinkOut,
+            links_service.list_links(
+                db, include_hidden=include_hidden, archived=include_archived, limit=limit
+            ),
+        )
+
+
+@mcp.tool()
+def get_link(link_id: int) -> dict:
+    """Get one link-tree button by id."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(LinkOut, _require(links_service.get_link(db, link_id), "link not found"))
+
+
+@mcp.tool()
+def create_link(title: str, url: str, subtitle: str | None = None,
+                icon: str | None = None, accent: str | None = None,
+                display_order: int | None = None, is_visible: bool | None = None) -> dict:
+    """Add a button to the public link-tree page. `url` is an absolute http(s)
+    link or a relative path like /events. `icon` is a single emoji; `accent` is
+    one of: blue, pink, yellow, mint, sky, violet, lime, coral (omit to
+    auto-cycle by position). New links default to visible."""
+    require_scope("write")
+    data = _coerce(LinkCreate, _data(title=title, url=url, subtitle=subtitle, icon=icon,
+                                     accent=accent, display_order=display_order,
+                                     is_visible=is_visible))
+    with SessionLocal() as db:
+        return _dump(LinkOut, links_service.create_link(db, data))
+
+
+@mcp.tool()
+def update_link(link_id: int, title: str | None = None, url: str | None = None,
+                subtitle: str | None = None, icon: str | None = None,
+                accent: str | None = None, display_order: int | None = None,
+                is_visible: bool | None = None) -> dict:
+    """Update a link-tree button (only the fields you pass change). Use
+    `is_visible` to show/hide it on the public page without deleting it."""
+    require_scope("write")
+    data = _coerce(LinkUpdate, _data(title=title, url=url, subtitle=subtitle, icon=icon,
+                                     accent=accent, display_order=display_order,
+                                     is_visible=is_visible))
+    with SessionLocal() as db:
+        return _dump(LinkOut, _require(links_service.update_link(db, link_id, data),
+                                       "link not found"))
+
+
+@mcp.tool()
+def archive_link(link_id: int) -> dict:
+    """Soft-delete (archive) a link-tree button. It's removed from the page but
+    never hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(LinkOut, _require(links_service.archive_link(db, link_id),
+                                       "link not found"))
+
+
+@mcp.tool()
+def reorder_links(ordered_ids: list[int]) -> list[dict]:
+    """Reorder the link-tree buttons: pass every link id in the new top-to-bottom
+    order. Each link's display_order is set to its index. Returns the new
+    display-ordered list."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump_list(LinkOut, links_service.reorder_links(db, ordered_ids))
+
+
+@mcp.tool()
+def get_link_profile() -> dict:
+    """Get the public link-tree page header (title, tagline, mascot)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(LinkProfileOut, links_service.get_profile(db))
+
+
+@mcp.tool()
+def update_link_profile(title: str | None = None, tagline: str | None = None,
+                        mascot: str | None = None) -> dict:
+    """Update the public link-tree page header. `mascot` is a PixelDuck sprite
+    name (e.g. duck-mascot, duck-wave, duck-trophy)."""
+    require_scope("write")
+    data = _coerce(LinkProfileUpdate, _data(title=title, tagline=tagline, mascot=mascot))
+    with SessionLocal() as db:
+        return _dump(LinkProfileOut, links_service.update_profile(db, data))
 
 
 # --------------------------------------------------------------------------- #

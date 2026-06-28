@@ -1068,6 +1068,72 @@ class EventPartner(Base):
     )
 
 
+class Link(Base):
+    """One row of the public DSEC "link tree" — a single tappable button on the
+    standalone, chromeless `/links` page (dsec-website) that the committee curates
+    as the single link in an Instagram/Discord bio.
+
+    Deliberately lightweight: a title, optional subtitle, a destination URL (an
+    absolute http(s) URL or a relative path like `/events`), an optional emoji
+    `icon`, an optional `accent` (one of the 8 brand accents; NULL ⇒ the website
+    auto-cycles by visible position), an explicit `display_order` (ascending —
+    lower sits higher on the page), and an `is_visible` flag the PUBLIC feed
+    filters on (NOT `show_on_website`). Soft-deleted via `archived`.
+    """
+
+    __tablename__ = "link"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(120))
+    subtitle: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    url: Mapped[str] = mapped_column(String(2048))
+    # A single emoji, e.g. "🎮" (empty/null allowed).
+    icon: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # One of: blue, pink, yellow, mint, sky, violet, lime, coral. NULL ⇒ the
+    # public page auto-cycles an accent by the link's visible position.
+    accent: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    display_order: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    # The public feed filters on this (links default to visible).
+    is_visible: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+
+class LinkProfile(Base):
+    """The singleton header for the public link-tree page (always row id=1).
+
+    Carries the big heading (`title`), the sub-heading (`tagline`), and the
+    `mascot` — a PixelDuck sprite name resolving to a file
+    `dsec-website/public/pixel/<mascot>.webp` (default `duck-mascot`). The
+    service layer always upserts/reads id=1, so there is only ever one row.
+    """
+
+    __tablename__ = "link_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(
+        String(60), default="DSEC", server_default=text("'DSEC'")
+    )
+    tagline: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    mascot: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+
+
 class EventConnection(Base):
     """A symmetric, visual-only link between two events ("these events are
     related" — e.g. a series, a follow-up, a kickoff→closing pair).
