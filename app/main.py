@@ -49,6 +49,7 @@ from app.features.people.router import router as people_router
 from app.features.projects.router import router as projects_router
 from app.features.public_api.router import router as public_router
 from app.features.reviews.router import router as reviews_router
+from app.features.scan.router import router as scan_router
 from app.features.sponsor_leads.router import router as sponsor_leads_router
 from app.features.sponsor_packages.router import router as sponsor_packages_router
 from app.features.sponsors.router import router as sponsors_router
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(sponsor_leads_router, prefix="/sponsor-leads", tags=["sponsor-leads"])
     app.include_router(partners_router, prefix="/partners", tags=["partners"])
     app.include_router(links_router, prefix="/links", tags=["links"])
+    app.include_router(scan_router, prefix="/scan", tags=["scan"])
     app.include_router(finance_router, prefix="/finance", tags=["finance"])
     app.include_router(members_router, prefix="/members", tags=["members"])
     app.include_router(website_router, prefix="/website", tags=["website"])

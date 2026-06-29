@@ -698,9 +698,28 @@ class Document(Base):
     # Per-committee scoping for notes visibility (dsec-hub enforces who can see).
     committee: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)  # markdown
-    content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # future block editor
+    # Block-editor payload for a document published as a public website page:
+    #   {"version": 1, "blocks": [{"id": str, "type": str, ...}, ...]}
+    # See features/website/pageblocks.py for the canonical block contract.
+    content_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Draft / InReview / Final
     status: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    # ---- Custom page publishing (a Document surfaced as a public dsec.club page) ----
+    # A document becomes a live page once it has a slug AND is_public=true. The
+    # block content (content_json) renders at https://dsec.club/<slug>. These are
+    # all dormant for ordinary committee docs (slug NULL, is_public false).
+    slug: Mapped[str | None] = mapped_column(String(256), unique=True, index=True, nullable=True)
+    is_public: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+    nav_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    show_in_nav: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    nav_area: Mapped[str | None] = mapped_column(String(16), nullable=True)  # header | footer
+    nav_order: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    seo_description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cover_image_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("document.id"), index=True, nullable=True)
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("people.id"), index=True, nullable=True)
     related_event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), index=True, nullable=True)
@@ -1155,6 +1174,87 @@ class LinkProfile(Base):
     )
     tagline: Mapped[str | None] = mapped_column(String(160), nullable=True)
     mascot: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # ---- Socials --------------------------------------------------------- #
+    # The club's canonical social links, edited here ONCE (singleton row) and
+    # served to every surface — the /links page, the website + portal footers,
+    # and the contact / scan / join pages — through the public link-tree feed.
+    # So a handle change happens in exactly one place. All nullable: an unset
+    # social simply doesn't render anywhere. The four URL fields hold absolute
+    # http(s) profile URLs; `email` holds a bare address (consumers build the
+    # mailto: link themselves).
+    instagram: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    discord: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    linkedin: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    github: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+
+
+class ScanTarget(Base):
+    """One QR card on the public, big-screen `/scan` page (dsec-website) — built
+    to throw up on a display at an event so people point their camera and connect.
+
+    Like a link-tree button but QR-shaped: a `label` (card heading), an optional
+    `caption` (one descriptive line), the `url` the QR encodes (absolute http(s)/
+    mailto/tel), an optional `pretty` short display of the destination shown under
+    the QR (e.g. "@dsec", "dsec.club"), an optional `accent` (one of the 4 light
+    scan accents: blue/pink/yellow/mint — NULL ⇒ the page auto-cycles by visible
+    position), an explicit `display_order`, and an `is_visible` flag the PUBLIC
+    feed filters on. Soft-deleted via `archived`.
+
+    Unlike the link tree there is NO hardcoded fallback set: /scan renders exactly
+    the visible rows here (plus the club's Instagram/Discord auto-pulled from the
+    link-profile socials), so an empty table means an (almost) empty wall.
+    """
+
+    __tablename__ = "scan_target"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(120))
+    caption: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    url: Mapped[str] = mapped_column(String(2048))
+    # Short, human display of the destination shown under the QR (e.g. "@dsec").
+    pretty: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # One of: blue, pink, yellow, mint. NULL ⇒ the public page auto-cycles.
+    accent: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    display_order: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
+    is_visible: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
+    )
+    archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+
+
+class ScanPage(Base):
+    """The singleton header for the public /scan QR wall (always row id=1).
+
+    Just the page-level copy the committee can re-brand per event — the big
+    `title` and the one-line `description` under it. Both nullable: a NULL field
+    means "use the built-in default" (the public feed + the website fall back to
+    the standard scan copy), so clearing a field in the dashboard restores the
+    default rather than blanking the page. The QR cards themselves live in
+    `scan_target`; this row carries only the heading.
+    """
+
+    __tablename__ = "scan_page"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()

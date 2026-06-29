@@ -54,6 +54,14 @@ from app.features.links.schemas import (
     LinkProfileUpdate,
     LinkUpdate,
 )
+from app.features.scan import service as scan_service
+from app.features.scan.schemas import (
+    ScanPageOut,
+    ScanPageUpdate,
+    ScanTargetCreate,
+    ScanTargetOut,
+    ScanTargetUpdate,
+)
 from app.features.members import service as members_service
 from app.features.members.schemas import MemberOut, MemberTrendPoint
 from app.features.partners import service as partners_service
@@ -731,7 +739,8 @@ def reorder_links(ordered_ids: list[int]) -> list[dict]:
 
 @mcp.tool()
 def get_link_profile() -> dict:
-    """Get the public link-tree page header (title, tagline, mascot)."""
+    """Get the public link-tree page header (title, tagline, mascot) and the
+    club's canonical socials (instagram, discord, linkedin, github, email)."""
     require_scope("read")
     with SessionLocal() as db:
         return _dump(LinkProfileOut, links_service.get_profile(db))
@@ -739,13 +748,125 @@ def get_link_profile() -> dict:
 
 @mcp.tool()
 def update_link_profile(title: str | None = None, tagline: str | None = None,
-                        mascot: str | None = None) -> dict:
-    """Update the public link-tree page header. `mascot` is a PixelDuck sprite
-    name (e.g. duck-mascot, duck-wave, duck-trophy)."""
+                        mascot: str | None = None, instagram: str | None = None,
+                        discord: str | None = None, linkedin: str | None = None,
+                        github: str | None = None, email: str | None = None) -> dict:
+    """Update the public link-tree page header and the club's canonical social
+    links. `mascot` is a PixelDuck sprite name (e.g. duck-mascot, duck-wave,
+    duck-trophy). The socials are the single source of truth served to every
+    surface (the /links page, the website + portal footers, contact/scan/join):
+    instagram/discord/linkedin/github are absolute http(s) URLs; `email` is a
+    bare address. Pass an empty string to clear a social. Only the fields you
+    pass change."""
     require_scope("write")
-    data = _coerce(LinkProfileUpdate, _data(title=title, tagline=tagline, mascot=mascot))
+    data = _coerce(LinkProfileUpdate, _data(
+        title=title, tagline=tagline, mascot=mascot, instagram=instagram,
+        discord=discord, linkedin=linkedin, github=github, email=email,
+    ))
     with SessionLocal() as db:
         return _dump(LinkProfileOut, links_service.update_profile(db, data))
+
+
+# --------------------------------------------------------------------------- #
+# scan wall (the public /scan QR page)
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def list_scan_targets(include_hidden: bool = True, include_archived: bool = False,
+                      limit: int = 200) -> list[dict]:
+    """List the QR cards on the public /scan page, in display order. `include_hidden=
+    False` drops cards not currently shown; `include_archived=True` includes
+    soft-deleted ones."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump_list(
+            ScanTargetOut,
+            scan_service.list_scan_targets(
+                db, include_hidden=include_hidden, archived=include_archived, limit=limit
+            ),
+        )
+
+
+@mcp.tool()
+def get_scan_target(target_id: int) -> dict:
+    """Get one /scan QR card by id."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(ScanTargetOut,
+                     _require(scan_service.get_scan_target(db, target_id), "scan target not found"))
+
+
+@mcp.tool()
+def create_scan_target(label: str, url: str, caption: str | None = None,
+                       pretty: str | None = None, accent: str | None = None,
+                       display_order: int | None = None, is_visible: bool | None = None) -> dict:
+    """Add a QR card to the public /scan wall. `url` is the absolute http(s)/mailto/
+    tel destination the QR encodes (no relative paths). `caption` is one
+    descriptive line; `pretty` is a short display of the destination shown under
+    the QR (e.g. "@dsec"); `accent` is one of: blue, pink, yellow, mint (omit to
+    auto-cycle by position). New cards default to visible."""
+    require_scope("write")
+    data = _coerce(ScanTargetCreate, _data(label=label, url=url, caption=caption, pretty=pretty,
+                                           accent=accent, display_order=display_order,
+                                           is_visible=is_visible))
+    with SessionLocal() as db:
+        return _dump(ScanTargetOut, scan_service.create_scan_target(db, data))
+
+
+@mcp.tool()
+def update_scan_target(target_id: int, label: str | None = None, url: str | None = None,
+                       caption: str | None = None, pretty: str | None = None,
+                       accent: str | None = None, display_order: int | None = None,
+                       is_visible: bool | None = None) -> dict:
+    """Update a /scan QR card (only the fields you pass change). Use `is_visible`
+    to show/hide it on the public page without deleting it."""
+    require_scope("write")
+    data = _coerce(ScanTargetUpdate, _data(label=label, url=url, caption=caption, pretty=pretty,
+                                           accent=accent, display_order=display_order,
+                                           is_visible=is_visible))
+    with SessionLocal() as db:
+        return _dump(ScanTargetOut, _require(scan_service.update_scan_target(db, target_id, data),
+                                             "scan target not found"))
+
+
+@mcp.tool()
+def archive_scan_target(target_id: int) -> dict:
+    """Soft-delete (archive) a /scan QR card. It's removed from the page but never
+    hard-deleted. Confirm with the human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(ScanTargetOut, _require(scan_service.archive_scan_target(db, target_id),
+                                             "scan target not found"))
+
+
+@mcp.tool()
+def reorder_scan_targets(ordered_ids: list[int]) -> list[dict]:
+    """Reorder the /scan QR cards: pass every card id in the new order. Each card's
+    display_order is set to its index. Returns the new display-ordered list."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump_list(ScanTargetOut, scan_service.reorder_scan_targets(db, ordered_ids))
+
+
+@mcp.tool()
+def get_scan_page() -> dict:
+    """Get the public /scan wall header: the big `title` and the one-line
+    `description` shown above the QR cards. Either may be null (the page then
+    shows the built-in default copy)."""
+    require_scope("read")
+    with SessionLocal() as db:
+        return _dump(ScanPageOut, scan_service.get_page(db))
+
+
+@mcp.tool()
+def update_scan_page(title: str | None = None, description: str | None = None) -> dict:
+    """Update the public /scan wall header (the heading above the QR cards). Pass
+    an empty string to clear a field so the built-in default copy shows again.
+    Only the fields you pass change."""
+    require_scope("write")
+    data = _coerce(ScanPageUpdate, _data(title=title, description=description))
+    with SessionLocal() as db:
+        return _dump(ScanPageOut, scan_service.update_page(db, data))
 
 
 # --------------------------------------------------------------------------- #
@@ -1160,18 +1281,34 @@ def create_document(title: str, content: str | None = None, type: str | None = N
                     status: str | None = None, parent_id: int | None = None,
                     assignee_id: int | None = None, related_event_id: int | None = None,
                     related_sponsor_id: int | None = None, related_project_id: int | None = None,
-                    related_meeting_id: int | None = None, related_task_id: int | None = None) -> dict:
+                    related_meeting_id: int | None = None, related_task_id: int | None = None,
+                    content_json: dict | None = None, slug: str | None = None,
+                    is_public: bool | None = None, nav_label: str | None = None,
+                    show_in_nav: bool | None = None, nav_area: str | None = None,
+                    nav_order: int | None = None, seo_description: str | None = None,
+                    cover_image_url: str | None = None) -> dict:
     """Create a document (markdown `content`). Use type=Deliverable + assignee_id for a per-person deliverable.
 
     `committee` scopes the document to one committee (notes visibility).
-    `related_task_id` links the doc to a task (e.g. a spec or brief for that task)."""
+    `related_task_id` links the doc to a task (e.g. a spec or brief for that task).
+
+    CUSTOM PAGE: a document becomes a public dsec.club/<slug> page once it has a
+    `slug` and `is_public=true`. `content_json` holds the page's block body —
+    {"version": 1, "blocks": [{"id","type",...}]} with types hero|heading|richtext|
+    quote|image|gallery|embed|split|columns|cards|divider|cta|stats|faq|logos.
+    `show_in_nav`/`nav_area` (header|footer)/`nav_label`/`nav_order` control its
+    placement in the site navigation; `seo_description`/`cover_image_url` set the
+    page <head>. Image blocks reference uploaded media URLs (upload in the dashboard)."""
     require_scope("write")
     data = _coerce(DocumentCreate, _data(title=title, content=content, type=type, committee=committee,
                                          status=status,
                                          parent_id=parent_id, assignee_id=assignee_id,
                                          related_event_id=related_event_id, related_sponsor_id=related_sponsor_id,
                                          related_project_id=related_project_id, related_meeting_id=related_meeting_id,
-                                         related_task_id=related_task_id))
+                                         related_task_id=related_task_id, content_json=content_json,
+                                         slug=slug, is_public=is_public, nav_label=nav_label,
+                                         show_in_nav=show_in_nav, nav_area=nav_area, nav_order=nav_order,
+                                         seo_description=seo_description, cover_image_url=cover_image_url))
     with SessionLocal() as db:
         return _dump(DocumentOut, documents_service.create_document(db, data))
 
@@ -1179,14 +1316,27 @@ def create_document(title: str, content: str | None = None, type: str | None = N
 @mcp.tool()
 def update_document(document_id: int, title: str | None = None, content: str | None = None,
                     status: str | None = None, assignee_id: int | None = None,
-                    related_task_id: int | None = None) -> dict:
+                    related_task_id: int | None = None, content_json: dict | None = None,
+                    slug: str | None = None, is_public: bool | None = None,
+                    nav_label: str | None = None, show_in_nav: bool | None = None,
+                    nav_area: str | None = None, nav_order: int | None = None,
+                    seo_description: str | None = None, cover_image_url: str | None = None) -> dict:
     """Update a document's title, markdown content, status, or assignee.
 
-    Pass `related_task_id` to link the doc to a task (or 0 to clear the link)."""
+    Pass `related_task_id` to link the doc to a task (or 0 to clear the link).
+
+    CUSTOM PAGE: set `slug` + `is_public=true` to publish this doc as a public
+    dsec.club/<slug> page. `content_json` is the block body (see create_document
+    for the block contract). `show_in_nav`/`nav_area`/`nav_label`/`nav_order`
+    place it in the site nav; `seo_description`/`cover_image_url` set the <head>."""
     require_scope("write")
     data = _coerce(DocumentUpdate, _data(title=title, content=content, status=status,
                                          assignee_id=assignee_id,
-                                         related_task_id=related_task_id or None))
+                                         related_task_id=related_task_id or None,
+                                         content_json=content_json, slug=slug, is_public=is_public,
+                                         nav_label=nav_label, show_in_nav=show_in_nav, nav_area=nav_area,
+                                         nav_order=nav_order, seo_description=seo_description,
+                                         cover_image_url=cover_image_url))
     # 0 is the explicit "unlink" sentinel; _data drops None, so re-inject a NULL.
     if related_task_id == 0:
         data["related_task_id"] = None

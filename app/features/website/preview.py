@@ -72,3 +72,46 @@ def verify_preview_token(token: str) -> int | None:
     if not hmac.compare_digest(sig, _sign(event_id, exp)):
         return None
     return event_id
+
+
+# --------------------------------------------------------------------------- #
+# Page (custom-page Document) preview tokens
+#
+# Same stateless HMAC scheme as events, but with a distinct message prefix so a
+# page token can never be replayed as an event token (or vice-versa). Lets the
+# committee preview an UNPUBLISHED page (draft Document) on the live site before
+# flipping it public.
+# --------------------------------------------------------------------------- #
+
+
+def _sign_page(document_id: int, exp: int) -> str:
+    msg = f"page-preview:{document_id}:{exp}".encode()
+    digest = hmac.new(_secret(), msg, hashlib.sha256).digest()[:_SIG_BYTES]
+    return _b64(digest)
+
+
+def make_page_preview_token(document_id: int, ttl: int | None = None) -> str:
+    """Mint a fresh preview token for a page document, valid for ``ttl`` seconds."""
+    window = ttl if ttl is not None else settings.EVENT_PREVIEW_TTL
+    exp = int(time.time()) + int(window)
+    return f"{document_id}.{exp}.{_sign_page(document_id, exp)}"
+
+
+def verify_page_preview_token(token: str) -> int | None:
+    """Return the document id a valid, unexpired page token addresses, else None."""
+    if not token:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    id_s, exp_s, sig = parts
+    try:
+        document_id = int(id_s)
+        exp = int(exp_s)
+    except ValueError:
+        return None
+    if exp < int(time.time()):
+        return None
+    if not hmac.compare_digest(sig, _sign_page(document_id, exp)):
+        return None
+    return document_id

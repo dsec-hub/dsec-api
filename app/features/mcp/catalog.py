@@ -161,9 +161,33 @@ CATALOG: tuple[Tool, ...] = (
     Tool("reorder_links", "write", "Link tree",
          "Reorder the link-tree buttons by passing their ids in the new top-to-bottom order."),
     Tool("get_link_profile", "read", "Link tree",
-         "Get the link-tree page header (title, tagline, mascot)."),
+         "Get the link-tree page header (title, tagline, mascot) and the club's "
+         "canonical socials (instagram, discord, linkedin, github, email)."),
     Tool("update_link_profile", "write", "Link tree",
-         "Update the link-tree page header (title, tagline, mascot)."),
+         "Update the link-tree page header (title, tagline, mascot) and the "
+         "club's canonical socials (instagram/discord/linkedin/github URLs + "
+         "email) — the single source served to the /links page, footers and "
+         "contact/scan/join. Empty string clears a social."),
+
+    # ---- Scan wall -------------------------------------------------------- #
+    Tool("list_scan_targets", "read", "Scan wall",
+         "List the QR cards on the public /scan page (incl. hidden), in display order."),
+    Tool("get_scan_target", "read", "Scan wall",
+         "Get one /scan QR card by id."),
+    Tool("create_scan_target", "write", "Scan wall",
+         "Add a /scan QR card (label, url, optional caption, pretty display text, accent)."),
+    Tool("update_scan_target", "write", "Scan wall",
+         "Update a /scan QR card (only the fields you pass change)."),
+    Tool("archive_scan_target", "write", "Scan wall",
+         "Soft-delete (archive) a /scan QR card. Confirm with the human first."),
+    Tool("reorder_scan_targets", "write", "Scan wall",
+         "Reorder the /scan QR cards by passing their ids in the new order."),
+    Tool("get_scan_page", "read", "Scan wall",
+         "Get the /scan wall header — the big title + one-line description shown "
+         "above the QR cards (either may be null = the built-in default copy)."),
+    Tool("update_scan_page", "write", "Scan wall",
+         "Update the /scan wall header (title + description). Pass an empty string "
+         "to clear a field so the built-in default copy shows again."),
 
     # ---- Projects --------------------------------------------------------- #
     Tool("list_projects", "read", "Projects",
@@ -227,9 +251,11 @@ CATALOG: tuple[Tool, ...] = (
     Tool("get_document", "read", "Documents",
          "Get one document with its full Markdown content."),
     Tool("create_document", "write", "Documents",
-         "Create a document."),
+         "Create a document — or a public dsec.club page (set slug + is_public + "
+         "content_json blocks)."),
     Tool("update_document", "write", "Documents",
-         "Update a document's title, content, status or assignee."),
+         "Update a document's title, content, status or assignee — or publish it "
+         "as a page (slug, is_public, content_json blocks, nav placement)."),
     Tool("archive_document", "write", "Documents",
          "Soft-delete (archive) a document. Confirm with the human first."),
 

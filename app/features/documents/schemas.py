@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,6 +17,15 @@ class DocumentBase(BaseModel):
     content: str | None = None
     content_json: dict | None = None
     status: str | None = None
+    # ---- Custom page publishing fields ----
+    slug: str | None = None
+    is_public: bool | None = None
+    nav_label: str | None = None
+    show_in_nav: bool | None = None
+    nav_area: Literal["header", "footer"] | None = None
+    nav_order: int | None = None
+    seo_description: str | None = None
+    cover_image_url: str | None = None
     parent_id: int | None = None
     assignee_id: int | None = None
     related_event_id: int | None = None
@@ -44,6 +54,14 @@ class DocumentOut(BaseModel):
     content: str | None
     content_json: dict | None
     status: str | None
+    slug: str | None
+    is_public: bool
+    nav_label: str | None
+    show_in_nav: bool
+    nav_area: str | None
+    nav_order: int
+    seo_description: str | None
+    cover_image_url: str | None
     parent_id: int | None
     assignee_id: int | None
     related_event_id: int | None

@@ -8,7 +8,10 @@ from pydantic import BaseModel, ConfigDict
 
 # portal_account — a member-portal login's verification face photo (entity_id is
 # the portal_account.id; the portal owns that table and stores the returned url).
-ENTITY_TYPES = {"event", "project", "sponsor", "speaker", "person", "partner", "portal_account"}
+# document — images used by a custom-page document's content blocks (entity_id is
+# the document.id; blocks reference the returned media URLs).
+ENTITY_TYPES = {"event", "project", "sponsor", "speaker", "person", "partner",
+                "portal_account", "document"}
 # image/poster/banner — gallery roles for events & projects. logo — a sponsor's
 # or partner's brand mark (kept transparent). photo — a speaker's headshot, a
 # person's (roster member's) profile picture, or a portal member's face photo.

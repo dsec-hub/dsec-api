@@ -225,12 +225,26 @@ class PublicLink(BaseModel):
     display_order: int
 
 
+class PublicSocials(BaseModel):
+    """The club's canonical social links — the single source of truth that every
+    public surface (the /links page, the site + portal footers, contact/scan/
+    join) reads. Any field is null when the committee hasn't set it; consumers
+    then simply don't render that platform. `email` is a bare address."""
+
+    instagram: str | None = None
+    discord: str | None = None
+    linkedin: str | None = None
+    github: str | None = None
+    email: str | None = None
+
+
 class PublicLinkProfile(BaseModel):
     """The link-tree page header (the singleton link_profile row id=1)."""
 
     title: str
     tagline: str | None
     mascot: str | None       # a PixelDuck sprite name (public/pixel/<mascot>.webp)
+    socials: PublicSocials = PublicSocials()
 
 
 class PublicLinkTree(BaseModel):
@@ -238,6 +252,52 @@ class PublicLinkTree(BaseModel):
 
     profile: PublicLinkProfile
     links: list[PublicLink]
+
+
+class PublicScanTarget(BaseModel):
+    """One QR card on the public, big-screen `/scan` page. Only ever returned for
+    visible, non-archived rows. `accent` (blue/pink/yellow/mint) is null when the
+    committee left it on "auto" — the website then cycles by visible position."""
+
+    label: str
+    caption: str | None
+    url: str                 # the QR encodes this (absolute http(s)/mailto/tel)
+    pretty: str | None       # short display of the destination, shown under the QR
+    accent: str | None       # blue|pink|yellow|mint; null = auto-cycle by position
+    display_order: int
+
+
+class PublicScanWall(BaseModel):
+    """The full public /scan feed: the editable page header (title + one-line
+    description, already defaulted to the built-in copy when unset) plus the
+    visible, non-archived QR cards in display order."""
+
+    title: str
+    description: str
+    targets: list[PublicScanTarget]
+
+
+class PublicPageSummary(BaseModel):
+    """A published custom page's metadata — used for the site nav, the pages
+    index, and static-path generation. No block body (kept lean)."""
+
+    slug: str
+    title: str
+    nav_label: str | None      # label to show in nav (falls back to title)
+    show_in_nav: bool          # surface in the public site navigation
+    nav_area: str | None       # header | footer
+    nav_order: int
+    seo_description: str | None
+    cover_image: str | None    # OG/share image URL
+    updated_at: str | None     # ISO 8601
+
+
+class PublicPage(PublicPageSummary):
+    """A published custom page with its full, sanitized block body. Blocks are
+    pre-validated by ``website.pageblocks.sanitize_blocks`` — each is a known
+    type with whitelisted, http(s)-only fields."""
+
+    blocks: list[dict]
 
 
 class SiteStats(BaseModel):

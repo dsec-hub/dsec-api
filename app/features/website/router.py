@@ -22,9 +22,15 @@ from app.db import get_db
 from app.features.links import service as links_service
 from app.features.media import service as media_service
 from app.features.projects import service as projects_service
+from app.features.scan import service as scan_service
 from app.features.sponsor_leads import service as sponsor_leads_service
-from app.features.website.preview import verify_preview_token
+from app.features.website.pageblocks import sanitize_blocks
+from app.features.website.preview import (
+    verify_page_preview_token,
+    verify_preview_token,
+)
 from app.models import (
+    Document,
     Event,
     EventConnection,
     EventPartner,
@@ -50,7 +56,12 @@ from .schemas import (
     PublicLink,
     PublicLinkProfile,
     PublicLinkTree,
+    PublicScanTarget,
+    PublicScanWall,
+    PublicSocials,
     PublicMedia,
+    PublicPage,
+    PublicPageSummary,
     PublicPartner,
     PublicPerson,
     PublicPersonDetail,
@@ -645,10 +656,123 @@ def public_linktree(request: Request, db: Session = Depends(get_db)) -> PublicLi
     limiter.check_request(db, key_id=None, ip=client_ip(request))
     profile = links_service.get_profile(db)
     links = links_service.list_links(db, include_hidden=False, archived=False)
+    # Socials are flat columns on the singleton row; nest them for the feed so
+    # every consumer reads one tidy `profile.socials` object.
     return PublicLinkTree(
-        profile=PublicLinkProfile.model_validate(profile, from_attributes=True),
+        profile=PublicLinkProfile(
+            title=profile.title,
+            tagline=profile.tagline,
+            mascot=profile.mascot,
+            socials=PublicSocials(
+                instagram=profile.instagram,
+                discord=profile.discord,
+                linkedin=profile.linkedin,
+                github=profile.github,
+                email=profile.email,
+            ),
+        ),
         links=[PublicLink.model_validate(link, from_attributes=True) for link in links],
     )
+
+
+@router.get("/scan", response_model=PublicScanWall)
+def public_scan(request: Request, db: Session = Depends(get_db)) -> PublicScanWall:
+    """The public /scan QR wall: the editable header (title + one-line
+    description) plus the visible, non-archived QR cards in display order. The
+    header falls back to the built-in default copy when the committee hasn't set
+    its own, so it is never empty. No fallback card set here — the website renders
+    exactly these cards (and its own default set only when this feed is
+    unreachable)."""
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    page = scan_service.get_page(db)
+    rows = scan_service.list_scan_targets(db, include_hidden=False, archived=False)
+    return PublicScanWall(
+        title=page.title or scan_service.DEFAULT_PAGE_TITLE,
+        description=page.description or scan_service.DEFAULT_PAGE_DESCRIPTION,
+        targets=[PublicScanTarget.model_validate(r, from_attributes=True) for r in rows],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Custom pages (a published Document rendered as a dsec.club/<slug> page)
+# ---------------------------------------------------------------------------
+
+
+def _page_summary(doc: Document) -> PublicPageSummary:
+    return PublicPageSummary(
+        slug=doc.slug or "",
+        title=doc.title,
+        nav_label=doc.nav_label,
+        show_in_nav=bool(doc.show_in_nav),
+        nav_area=doc.nav_area,
+        nav_order=doc.nav_order or 0,
+        seo_description=doc.seo_description,
+        cover_image=doc.cover_image_url,
+        updated_at=doc.updated_at.isoformat() if doc.updated_at else None,
+    )
+
+
+def _public_page(doc: Document) -> PublicPage:
+    return PublicPage(
+        **_page_summary(doc).model_dump(),
+        blocks=sanitize_blocks(doc.content_json),
+    )
+
+
+@router.get("/pages", response_model=list[PublicPageSummary])
+def public_pages(request: Request, db: Session = Depends(get_db)) -> list[PublicPageSummary]:
+    """Published custom pages (metadata only) — powers the site nav, the pages
+    index, and the website's static-path generation. A page is published once it
+    has a slug AND is_public=true; drafts and ordinary committee docs never
+    appear. Ordered by nav_order then title."""
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    rows = db.execute(
+        select(Document).where(
+            Document.archived.is_(False),
+            Document.is_public.is_(True),
+            Document.slug.is_not(None),
+        ).order_by(Document.nav_order.asc(), Document.title.asc())
+    ).scalars().all()
+    return [_page_summary(d) for d in rows if d.slug]
+
+
+@router.get("/pages/preview/{token}", response_model=PublicPage)
+def public_page_preview(
+    token: str, request: Request, db: Session = Depends(get_db)
+) -> PublicPage:
+    """Render ONE page — published OR draft — from a signed preview token, so the
+    committee can preview an unpublished page exactly as it will look live. A
+    bad/expired token or a missing/archived doc returns 404 without revealing
+    which (drafts never leak to anyone without the link)."""
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    document_id = verify_page_preview_token(token)
+    if document_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")
+    doc = db.execute(
+        select(Document).where(Document.id == document_id, Document.archived.is_(False))
+    ).scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")
+    # A preview synthesises a slug for the layout when the draft has none yet.
+    if not doc.slug:
+        doc.slug = f"preview-{doc.id}"
+    return _public_page(doc)
+
+
+@router.get("/pages/{slug}", response_model=PublicPage)
+def public_page(slug: str, request: Request, db: Session = Depends(get_db)) -> PublicPage:
+    """One published custom page by its slug, with its full sanitized block body."""
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
+    doc = db.execute(
+        select(Document).where(
+            Document.slug == slug,
+            Document.is_public.is_(True),
+            Document.archived.is_(False),
+        )
+    ).scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")
+    return _public_page(doc)
 
 
 def _person_slug(name: str) -> str:

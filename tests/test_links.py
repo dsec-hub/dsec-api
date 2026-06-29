@@ -198,12 +198,24 @@ def test_public_linktree_feed(client, rw_key):
     gone = client.post("/links", json={"title": "Old", "url": "/old"}, headers=_h(rw_key)).json()
     client.post(f"/links/{gone['id']}/archive", headers=_h(rw_key))
 
-    # customise the profile header
-    client.patch("/links/profile", json={"title": "DSEC", "tagline": "Tag", "mascot": "duck-trophy"},
-                 headers=_h(rw_key))
+    # customise the profile header + the canonical socials. `email` is stored
+    # bare (a leading mailto: is stripped); the four URL socials must be http(s).
+    client.patch("/links/profile", json={
+        "title": "DSEC", "tagline": "Tag", "mascot": "duck-trophy",
+        "instagram": "https://instagram.com/dsec", "discord": "https://discord.gg/dsec",
+        "linkedin": "https://linkedin.com/company/dsec", "github": "https://github.com/dsec-hub",
+        "email": "mailto:admin@dsec.club",
+    }, headers=_h(rw_key))
 
     feed = client.get("/website/linktree").json()  # public, no auth
-    assert feed["profile"] == {"title": "DSEC", "tagline": "Tag", "mascot": "duck-trophy"}
+    assert feed["profile"] == {
+        "title": "DSEC", "tagline": "Tag", "mascot": "duck-trophy",
+        "socials": {
+            "instagram": "https://instagram.com/dsec", "discord": "https://discord.gg/dsec",
+            "linkedin": "https://linkedin.com/company/dsec", "github": "https://github.com/dsec-hub",
+            "email": "admin@dsec.club",
+        },
+    }
 
     titles = [ln["title"] for ln in feed["links"]]
     assert titles == ["Discord", "Website"]  # display_order asc; hidden + archived excluded
@@ -220,8 +232,11 @@ def test_public_linktree_default_profile_when_empty(client):
     """With nothing saved, the feed still returns the default header and no links
     (so the website never renders an empty page)."""
     feed = client.get("/website/linktree").json()
-    assert feed["profile"] == {"title": "DSEC", "tagline": "Deakin Software Engineering Club",
-                               "mascot": "duck-mascot"}
+    assert feed["profile"] == {
+        "title": "DSEC", "tagline": "Deakin Software Engineering Club", "mascot": "duck-mascot",
+        "socials": {"instagram": None, "discord": None, "linkedin": None,
+                    "github": None, "email": None},
+    }
     assert feed["links"] == []
 
 

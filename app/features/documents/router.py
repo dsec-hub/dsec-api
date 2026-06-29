@@ -9,6 +9,7 @@ from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
 from app.core.net import client_ip
 from app.db import get_db
+from app.features.website.preview import make_page_preview_token
 from app.models import APIKey
 
 from . import service
@@ -64,6 +65,25 @@ def get_document(
     return DocumentOut.model_validate(doc)
 
 
+@router.get("/{document_id}/page-preview-link")
+def document_page_preview_link(
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("read")),
+) -> dict:
+    """Mint an unguessable, time-limited link to preview this document as a page
+    on the public site (published OR draft) — the dashboard's "Preview page"
+    button. The token is stateless (an HMAC; see ``website.preview``) so there is
+    nothing to store or revoke — it simply expires."""
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    doc = service.get_document(db, document_id)
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    token = make_page_preview_token(doc.id)
+    return {"token": token, "path": f"/pages/preview/{token}"}
+
+
 @router.post("", response_model=DocumentOut, status_code=status.HTTP_201_CREATED)
 def create_document(
     body: DocumentCreate,
@@ -72,7 +92,10 @@ def create_document(
     key: APIKey = Depends(require_api_key("write")),
 ) -> DocumentOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    doc = service.create_document(db, body.model_dump(exclude_unset=True))
+    try:
+        doc = service.create_document(db, body.model_dump(exclude_unset=True))
+    except ValueError as exc:  # reserved / duplicate slug
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     return DocumentOut.model_validate(doc)
 
 
@@ -85,7 +108,10 @@ def update_document(
     key: APIKey = Depends(require_api_key("write")),
 ) -> DocumentOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    doc = service.update_document(db, document_id, body.model_dump(exclude_unset=True))
+    try:
+        doc = service.update_document(db, document_id, body.model_dump(exclude_unset=True))
+    except ValueError as exc:  # reserved / duplicate slug
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
     return DocumentOut.model_validate(doc)
