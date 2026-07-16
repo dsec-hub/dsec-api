@@ -21,7 +21,7 @@ under `app/features/` plus one mount line in `app/main.py` — nothing else chan
 Deploys to **Vercel** (Python / Fluid Compute) backed by **Neon Postgres**.
 
 **Neon is the single source of truth** for the club's data. The internal exec
-dashboard — `dsec-app`, a separate NextAuth-gated Next.js app (not in this repo) —
+dashboard — `dsec-hub`, a separate NextAuth-gated Next.js app (not in this repo) —
 reads and writes Neon directly via Drizzle. `dsec-api` **owns the schema**
 (SQLAlchemy models in `app/models.py` + Alembic migrations) and also serves that
 data over HTTP via the REST routers, public feed, and MCP server above.
@@ -120,7 +120,7 @@ spend, counted against the daily caps).
 ## Deploying to Vercel (this server as its own project)
 
 This FastAPI server is its **own Vercel project**, separate from the club's
-Next.js front-ends (including the internal `dsec-app` exec dashboard). Vercel
+Next.js front-ends (including the internal `dsec-hub` exec dashboard). Vercel
 auto-detects FastAPI from `requirements.txt` and the `app` instance at
 `app/main.py` — the entire app becomes one Vercel Function.
 
@@ -150,7 +150,7 @@ Full details + constraints in [`docs/deployment.md`](docs/deployment.md).
 
 ## Data model — Neon is the single source of truth
 
-The club's operational data lives in Neon. `dsec-app` (the NextAuth-gated exec
+The club's operational data lives in Neon. `dsec-hub` (the NextAuth-gated exec
 dashboard) reads and writes the tables directly via Drizzle, and `dsec-api`
 **owns** that schema and also serves it over HTTP:
 
@@ -162,7 +162,7 @@ dashboard) reads and writes the tables directly via Drizzle, and `dsec-api`
   (soft-delete) columns on every row. These are the dashboard's source of truth.
 
 Schema changes are versioned with **Alembic** (`alembic/`, applied via
-`scripts/migrate.py`). Alongside `dsec-app`'s direct access, `dsec-api` exposes
+`scripts/migrate.py`). Alongside `dsec-hub`'s direct access, `dsec-api` exposes
 these tables over HTTP through scope-gated REST routers (full CRUD), the no-auth
 public `/website` feed (published data only), and the `/mcp` server.
 
@@ -207,7 +207,7 @@ That's it. No existing feature folder is touched. See
 - **Trigger routes check rate limit + global LLM cap before any work.**
 - **Every feature shares core** — no feature reimplements db/auth/llm/logging.
 - **No persistent in-process state** — all durable state lives in Neon.
-- **Neon is the single source of truth** — `dsec-app` reads/writes it directly via
+- **Neon is the single source of truth** — `dsec-hub` reads/writes it directly via
   Drizzle; `dsec-api` owns the schema and serves it over HTTP (scope-gated REST,
   the public `/website` feed, and `/mcp`).
 - **A new integration requires zero edits to existing feature folders.**
