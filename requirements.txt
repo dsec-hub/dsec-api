@@ -1,27 +1,35 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-pydantic>=2.7.0
-pydantic-settings>=2.3.0
-sqlalchemy>=2.0.30
-alembic>=1.13.0
-psycopg[binary]>=3.2.0
-argon2-cffi>=23.1.0
+# Upper-bounded, exact pins. Generated 2026-08-06 from the known-good venv.
+#
+# WHY: these were all unbounded (`>=x.y`). On 2026-08-05 a docs-only commit
+# triggered a rebuild, pip resolved mcp to 2.0.0 (released 28 Jul, which deleted
+# mcp.server.fastmcp), and the API returned FUNCTION_INVOCATION_FAILED on every
+# route for ~20 hours. No application code had changed.
+#
+# Bump deliberately, one at a time, and redeploy. Do not loosen these back to >=.
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+sqlalchemy==2.0.51
+alembic==1.18.5
+psycopg[binary]==3.3.4
+argon2-cffi==25.1.0
 # Verify dsec-hub's bcryptjs password hashes during the OAuth login flow.
-bcrypt>=4.1.0
-anthropic>=0.50.0
-jinja2>=3.1.4
-python-multipart>=0.0.9
-httpx>=0.27.0
-openpyxl>=3.1.0
-Pillow>=10.4.0
-pillow-heif>=1.0.0
-supabase>=2.31.0
+bcrypt==5.0.0
+anthropic==0.120.2
+jinja2==3.1.6
+python-multipart==0.0.32
+httpx==0.28.1
+openpyxl==3.1.5
+Pillow==12.3.0
+pillow-heif==1.5.0
+supabase==2.31.0
 # PINNED <2.0.0 — mcp 2.0.0 (released 2026-07-28) removed `mcp.server.fastmcp`,
 # which app/features/mcp/server.py imports. An unpinned rebuild resolved to 2.0.0
 # and took the whole API down with ModuleNotFoundError on cold start.
 # To unpin, migrate to the standalone `fastmcp` package first.
-mcp>=1.2.0,<2.0.0
+mcp==1.29.0
 # Pure-Python QR generation for member verification cards (no extra deps).
-segno>=1.6.1
+segno==1.6.6
 # Ed25519 verification of inbound Discord interaction signatures (webhook bot).
-cryptography>=42.0.0
+cryptography==49.0.0
