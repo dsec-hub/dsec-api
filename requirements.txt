@@ -16,7 +16,11 @@ openpyxl>=3.1.0
 Pillow>=10.4.0
 pillow-heif>=1.0.0
 supabase>=2.31.0
-mcp>=1.2.0
+# PINNED <2.0.0 — mcp 2.0.0 (released 2026-07-28) removed `mcp.server.fastmcp`,
+# which app/features/mcp/server.py imports. An unpinned rebuild resolved to 2.0.0
+# and took the whole API down with ModuleNotFoundError on cold start.
+# To unpin, migrate to the standalone `fastmcp` package first.
+mcp>=1.2.0,<2.0.0
 # Pure-Python QR generation for member verification cards (no extra deps).
 segno>=1.6.1
 # Ed25519 verification of inbound Discord interaction signatures (webhook bot).
