@@ -1,0 +1,81 @@
+# DSEC API — full VPS stack. One file is the whole deployment, deliberately:
+# committee turns over annually and the next person needs one thing to read.
+#
+#   caddy    TLS termination + reverse proxy (automatic Let's Encrypt certs)
+#   api      the FastAPI app
+#   migrate  runs `alembic upgrade head` once, before api starts
+#   cron     replaces the Vercel cron that closed the monthly games draw
+#
+# Usage on the VPS:
+#   cp .env.production.example .env   # then fill in real values
+#   docker compose up -d --build
+#   docker compose logs -f api
+
+name: dsec-api
+
+services:
+  # One-shot schema migration. `api` waits for this to exit 0, so a bad
+  # migration fails the deploy instead of half-starting the app. This is why
+  # RUN_MIGRATIONS_ON_STARTUP is forced off for the app container below.
+  migrate:
+    build: .
+    env_file: [.env]
+    environment:
+      APP_ENV: production
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+    command: ["python", "scripts/migrate.py"]
+    restart: "no"
+
+  api:
+    build: .
+    env_file: [.env]
+    environment:
+      APP_ENV: production
+      # Migrations are the `migrate` service's job. Leaving this on would race
+      # the migration container and re-run Alembic on every restart.
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8000"]
+    restart: unless-stopped
+    # No published ports: only caddy may reach the app. Binding 8000 to the host
+    # would expose the API unencrypted and bypass the rate limiter's IP handling.
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates — MUST persist or you will hit
+      - caddy_config:/config  # Let's Encrypt rate limits on redeploy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  # Replaces the `crons` block in vercel.json ("0 1 1 * *" -> close-draw).
+  # busybox crond keeps this in-compose rather than as a host systemd timer, so
+  # the whole deployment stays in one file that moves with the repo.
+  cron:
+    image: alpine:3
+    depends_on: [api]
+    env_file: [.env]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl >/dev/null 2>&1
+        echo "0 1 1 * * curl -fsS -m 300 -H \"Authorization: Bearer $$CRON_SECRET\" http://api:8000/games/cron/close-draw >> /var/log/cron.log 2>&1" > /etc/crontabs/root
+        crond -f -l 8
+
+volumes:
+  caddy_data:
+  caddy_config:

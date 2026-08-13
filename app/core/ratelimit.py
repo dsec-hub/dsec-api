@@ -70,16 +70,26 @@ class NeonRateLimiter:
         return row.count
 
     def check_request(self, db: Session, *, key_id: int | None, ip: str) -> None:
-        # Per-IP limit (key_id null, bucket = ip:<addr>).
-        ip_count = self._bump_minute(db, key_id=None, bucket=f"ip:{ip}")
-        if ip_count > settings.RATE_LIMIT_PER_IP_PER_MIN:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="per-IP rate limit exceeded",
-                headers={"Retry-After": "60"},
-            )
-        # Per-key limit.
-        if key_id is not None:
+        # Authenticated callers are limited PER KEY, not per IP.
+        #
+        # The per-IP bucket exists to protect the unauthenticated surface (the
+        # public /website feed, the OAuth endpoints, the Discord webhook) from an
+        # anonymous flood. Applying it to key-authenticated traffic actively
+        # breaks us: dsec-website, dsec-app, dsec-hub and dsec-games all call this
+        # API from *server-side* code, so they egress from a small number of
+        # addresses — often one. Under a shared per-IP bucket they burn each
+        # other's budget and 429 in a way that looks random and platform-agnostic.
+        # Each platform holds its own API key, so the per-key limit below is both
+        # the correct control and a strictly tighter one.
+        if key_id is None:
+            ip_count = self._bump_minute(db, key_id=None, bucket=f"ip:{ip}")
+            if ip_count > settings.RATE_LIMIT_PER_IP_PER_MIN:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="per-IP rate limit exceeded",
+                    headers={"Retry-After": "60"},
+                )
+        else:
             key_count = self._bump_minute(db, key_id=key_id, bucket="req")
             if key_count > settings.RATE_LIMIT_PER_MIN:
                 raise HTTPException(

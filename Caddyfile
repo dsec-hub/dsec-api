@@ -1,0 +1,59 @@
+# DSEC API — TLS termination and reverse proxy.
+#
+# Caddy obtains and renews Let's Encrypt certificates automatically; the only
+# prerequisites are that api.dsec.club resolves to this box and that ports 80
+# and 443 are open. Certificates live in the caddy_data volume — keep it, or
+# every redeploy re-issues and you will hit Let's Encrypt's rate limits.
+
+{
+	email {$ACME_EMAIL}
+	# Uncomment to test the whole cutover against Let's Encrypt's staging CA
+	# without burning rate limits on the real one:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Media uploads are capped at 15 MB and sponsor attachments at 25 MB by the
+	# app (MEDIA_MAX_UPLOAD_BYTES / ATTACHMENT_MAX_UPLOAD_BYTES). Give the proxy
+	# a little headroom over the largest, and let the app return its own tidy
+	# error rather than Caddy cutting the connection first.
+	request_body {
+		max_size 30MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy api:8000 {
+		# SECURITY — do not remove. app/core/net.py derives the rate-limit bucket
+		# from X-Real-IP, trusting it because Vercel's edge set it and clients
+		# could not override it. Behind a self-hosted proxy that guarantee only
+		# holds if we recreate it: {remote_host} is the real connecting peer, and
+		# assigning it here OVERWRITES any X-Real-IP the client tried to inject.
+		# Without this line an attacker sends a fresh fake X-Real-IP per request,
+		# gets a brand-new rate-limit bucket every time, and the per-IP guard on
+		# the public /website feed and the OAuth routes stops working entirely.
+		header_up X-Real-IP {remote_host}
+
+		# Long enough for a cold Anthropic call (meeting-notes generation) without
+		# hanging a client forever.
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}

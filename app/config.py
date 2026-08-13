@@ -22,6 +22,15 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+    # --- Deployment environment ---
+    # Drives validate_production_settings(). Historically that check keyed off
+    # Vercel's `VERCEL=1`, which silently disabled every production guard the
+    # moment the app moved to its own server. Set APP_ENV=production on the VPS
+    # (docker compose does this) so the insecure-default checks still run.
+    APP_ENV: str = Field(
+        default_factory=lambda: "production" if os.environ.get("VERCEL") == "1" else "development"
+    )
+
     # --- Shared agent / Apps Script auth ---
     # NOTE: the literal defaults below double as the "insecure default" sentinels
     # checked by validate_production_settings() — keep them in sync.
@@ -50,12 +59,29 @@ class Settings(BaseSettings):
     RUN_MIGRATIONS_ON_STARTUP: bool = Field(
         default_factory=lambda: os.environ.get("VERCEL") != "1"
     )
+    # SQLAlchemy pool sizing. The old hard-coded 5/2 was chosen for serverless,
+    # where N ephemeral function instances EACH held a pool and the risk was
+    # exhausting Neon's connection limit. One long-lived process inverts that:
+    # 5 becomes the throughput ceiling, since Starlette runs the ~190 sync
+    # endpoints in a 40-thread pool that all queue on those 5 connections.
+    DB_POOL_SIZE: int = 15
+    DB_MAX_OVERFLOW: int = 5
+    DB_POOL_RECYCLE: int = 300
 
     # --- API keys & rate limiting ---
     API_KEY_PREFIX: str = "dsec_live_"
-    RATE_LIMIT_PER_MIN: int = 60
+    # Per-key ceiling for AUTHENTICATED callers. 60/min (= 1 req/s) was calibrated
+    # for humans holding keys; it is far too tight for our four Next.js apps, which
+    # call this API server-side and can fan out to several endpoints in a single
+    # page render. 300/min (= 5 req/s) per key still caps runaway loops while
+    # leaving normal dashboard use comfortable. See ratelimit.check_request for
+    # why authenticated traffic is no longer also charged to the per-IP bucket.
+    RATE_LIMIT_PER_MIN: int = 300
     RATE_LIMIT_TRIGGER_PER_DAY: int = 200
     GLOBAL_DAILY_LLM_CAP: int = 1000
+    # Per-IP ceiling, applied to UNAUTHENTICATED traffic only (public /website
+    # feed, OAuth, webhooks). Depends on the reverse proxy setting a trustworthy
+    # X-Real-IP — see app/core/net.py.
     RATE_LIMIT_PER_IP_PER_MIN: int = 120
     MAX_REQUEST_BYTES: int = 100_000
 
@@ -235,15 +261,19 @@ _INSECURE_DEFAULTS = {
 def validate_production_settings(s: "Settings | None" = None) -> None:
     """Refuse to boot in production with insecure defaults or an ephemeral DB.
 
-    Called once at app startup (see app.main.create_app). Only enforced on Vercel
-    (``VERCEL=1``); local/dev/test keep the convenient fallbacks. Without this a
-    missing env var would silently leave the admin key-minting endpoint, gated
-    docs and dashboard behind publicly-known credentials, or persist data to a
-    throwaway serverless SQLite file. Failing loudly beats running open.
+    Called once at app startup (see app.main.create_app). Without this a missing
+    env var would silently leave the admin key-minting endpoint, gated docs and
+    dashboard behind publicly-known credentials, or persist data to a throwaway
+    SQLite file. Failing loudly beats running open.
+
+    Enforced whenever ``APP_ENV=production`` (set by docker compose on the VPS) or
+    the legacy ``VERCEL=1`` is present. It previously keyed off ``VERCEL=1``
+    ALONE, which meant lifting the app onto its own server silently disabled every
+    check below — the guard would have vanished exactly when it started to matter.
     """
-    if os.environ.get("VERCEL") != "1":
-        return
     s = s or settings
+    if s.APP_ENV.lower() != "production" and os.environ.get("VERCEL") != "1":
+        return
     problems: list[str] = []
     if s.AGENT_SECRET == _INSECURE_DEFAULTS["AGENT_SECRET"]:
         problems.append("AGENT_SECRET is still the default")
@@ -255,7 +285,8 @@ def validate_production_settings(s: "Settings | None" = None) -> None:
         raise RuntimeError(
             "Refusing to start: insecure production configuration — "
             + "; ".join(problems)
-            + ". Set the real values as Vercel environment variables."
+            + ". Set the real values in the deployment environment "
+            "(VPS: the .env file read by docker compose)."
         )
 
 

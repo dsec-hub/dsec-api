@@ -8,11 +8,24 @@ request to get a brand-new rate-limit bucket every time (defeating the per-IP
 guard and amplifying writes to the `RateLimit` table).
 
 This derives the IP from a value the *platform* sets, not one the caller can
-forge. On Vercel (the deploy target — see HOSTING.md, grey-cloud/DNS-only
+forge. On Vercel (the original deploy target — see HOSTING.md, grey-cloud/DNS-only
 Cloudflare so nothing else proxies in front), `x-real-ip` is set by the edge to
 the true connecting IP and cannot be overridden by the client, and the
 *rightmost* `X-Forwarded-For` hop is the one Vercel appends. We trust those, in
 order, and fall back to the socket peer.
+
+SELF-HOSTED (VPS + Caddy) — READ THIS BEFORE CHANGING THE PROXY:
+    The guarantee above is a property of the *proxy*, not of this code. A reverse
+    proxy that merely forwards client headers makes `x-real-ip` attacker-supplied
+    again, handing every request a fresh rate-limit bucket. The bundled Caddyfile
+    therefore sets `header_up X-Real-IP {remote_host}`, which OVERWRITES anything
+    the client sent with the real connecting peer. Any proxy put in front of this
+    app must do the equivalent.
+
+    If Cloudflare (orange-cloud) is ever enabled, the connecting peer becomes a
+    Cloudflare edge IP and every visitor collapses into a handful of buckets. In
+    that setup Caddy must be given `trusted_proxies` for Cloudflare's ranges and
+    should populate X-Real-IP from `CF-Connecting-IP` instead.
 """
 
 from __future__ import annotations
