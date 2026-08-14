@@ -35,7 +35,7 @@ def list_sponsors(
     limit: int = Query(100, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:sponsors")),
 ) -> list[SponsorOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_sponsors(
@@ -49,7 +49,7 @@ def get_sponsor(
     sponsor_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:sponsors")),
 ) -> SponsorOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     sponsor = service.get_sponsor(db, sponsor_id)
@@ -63,7 +63,7 @@ def create_sponsor(
     body: SponsorCreate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     sponsor = service.create_sponsor(db, body.model_dump(exclude_unset=True))
@@ -76,7 +76,7 @@ def update_sponsor(
     body: SponsorUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     sponsor = service.update_sponsor(db, sponsor_id, body.model_dump(exclude_unset=True))
@@ -90,7 +90,7 @@ def archive_sponsor(
     sponsor_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     sponsor = service.archive_sponsor(db, sponsor_id)
@@ -113,7 +113,7 @@ def list_contacts(
     sponsor_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:sponsors")),
 ) -> list[SponsorContactOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     _require_sponsor(db, sponsor_id)
@@ -127,7 +127,7 @@ def add_contact(
     body: SponsorContactCreate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorContactOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     _require_sponsor(db, sponsor_id)
@@ -145,7 +145,7 @@ def update_contact(
     body: SponsorContactUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorContactOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     contact = contacts.update_contact(db, contact_id, body.model_dump(exclude_unset=True))
@@ -160,7 +160,7 @@ def remove_contact(
     contact_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> None:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if contacts.remove_contact(db, contact_id) is None:

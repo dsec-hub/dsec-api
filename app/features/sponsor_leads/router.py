@@ -47,7 +47,7 @@ def list_leads(
     limit: int = Query(200, le=500),
     offset: int = 0,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:sponsors")),
 ) -> list[SponsorLeadOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_leads(db, status=lead_status, limit=limit, offset=offset)
@@ -60,7 +60,7 @@ def update_lead(
     body: SponsorLeadUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorLeadOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     data = body.model_dump(exclude_unset=True)

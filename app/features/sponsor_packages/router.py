@@ -23,7 +23,7 @@ router = APIRouter()
 def list_packages(
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:sponsors")),
 ) -> list[SponsorPackageOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_packages(db)
@@ -35,7 +35,7 @@ def get_package(
     package_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:sponsors")),
 ) -> SponsorPackageOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pkg = service.get_package(db, package_id)
@@ -49,7 +49,7 @@ def create_package(
     body: SponsorPackageCreate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorPackageOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pkg = service.create_package(db, body.model_dump(exclude_unset=True))
@@ -62,7 +62,7 @@ def update_package(
     body: SponsorPackageUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorPackageOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pkg = service.update_package(db, package_id, body.model_dump(exclude_unset=True))
@@ -76,7 +76,7 @@ def delete_package(
     package_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> None:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if not service.delete_package(db, package_id):
