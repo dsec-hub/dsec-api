@@ -6,22 +6,32 @@ cutover, and is the rollback target afterwards.
 
 ## Why the move
 
-The Vercel deployment executed in **`iad1` (Washington DC)** while Neon lives in
-**`ap-southeast-2` (Sydney)**. Every database round trip crossed the Pacific
-twice. Measured against the live deploy:
+**Not for latency — that is already fixed.** The Vercel deployment used to
+execute in `iad1` (Washington DC) against Neon in `ap-southeast-2` (Sydney), so
+every database round trip crossed the Pacific twice and `/website/events` took
+2.7–2.9 s warm. On 2026-08-14 the project was pinned to
+`serverlessFunctionRegion = syd1` and redeployed:
 
-| | Vercel (`iad1`) | Local, same code | Expected on VPS (Sydney) |
-|---|---|---|---|
-| `/health` (no DB) | 320–490 ms | 0.6 ms | ~20 ms |
-| `/website/events` | **2.7–2.9 s** | 1.6 ms | ~20–50 ms |
+| | Vercel `iad1` | Vercel `syd1` (now) |
+|---|---|---|
+| `/health` (no DB) | 320–490 ms | **84 ms** median |
+| `/website/events` | **2.7–2.9 s** | **121 ms** median |
 
-Six consecutive warm requests all landed at ~2.7 s, so this was structural, not
-cold-start noise. Co-locating the app with the database in Sydney is the whole
-point of the move; the lower bill is a side effect.
+That was a configuration bug, not an architecture problem, and it cost one
+setting to fix. Anyone reading an older version of this document was told the
+VPS would deliver a ~20× speedup; it will not, because the speedup already
+happened.
 
-A persistent process also unlocks things serverless cannot host at all — most
-immediately a **gateway** Discord bot (an open WebSocket), where the current
-`/discord/interactions` webhook bot is the only shape Vercel could support.
+What a region pin **cannot** fix is what the move is actually for:
+
+- A **gateway** Discord bot needs a persistent WebSocket. Serverless cannot host
+  one at any latency. The current `/discord/interactions` webhook bot is the only
+  shape Vercel could support.
+- **Cold starts** against Discord's 3 s interaction deadline.
+- **Flat, predictable cost** instead of per-invocation billing.
+
+Co-locating with the database remains a genuine benefit (~20–50 ms expected, a
+modest further gain on 121 ms), but it is no longer the argument.
 
 ## Shape
 
