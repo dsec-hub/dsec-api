@@ -49,6 +49,17 @@ services:
   caddy:
     image: caddy:2-alpine
     depends_on: [api]
+    # The Caddyfile substitutes {$API_DOMAIN} and {$ACME_EMAIL}, which are
+    # resolved INSIDE the container — so they have to be passed in explicitly.
+    # Without this Caddy expands them to nothing and dies on startup with
+    # "wrong argument count or unexpected line ending after 'email'", restarting
+    # forever. Deliberately NOT `env_file: [.env]` like the other services: Caddy
+    # has no business holding DATABASE_URL or the dashboard password, and the
+    # blast radius of a compromised TLS terminator should not include them.
+    # `:?` makes compose refuse to start rather than hand Caddy an empty domain.
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
     ports:
       - "80:80"
       - "443:443"
