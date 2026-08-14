@@ -8,6 +8,10 @@
 # The suite needs NO external services: tests/conftest.py points DATABASE_URL at
 # a throwaway SQLite file and stubs the LLM calls before importing the app. So
 # there is nothing to provision here and no secret to leak into a fork PR.
+#
+# A second job asserting that validate_production_settings() rejects placeholder
+# secrets belongs with the VPS migration, not here: on main that guard still
+# keys off VERCEL=1 alone, so there is nothing to assert until APP_ENV lands.
 
 name: CI
 
@@ -52,43 +56,3 @@ jobs:
       - run: python -m pip install -r requirements-dev.txt
 
       - run: python -m pytest
-
-  # The app must still import under a production-shaped environment. The test
-  # suite runs with APP_ENV unset, so it never exercises the guard in
-  # validate_production_settings() — the check that refuses to boot on a
-  # placeholder secret or a SQLite URL. That guard keyed off VERCEL=1 until
-  # recently and would have silently stopped running on the VPS, so it is worth
-  # asserting that it actually fires.
-  production-guard:
-    name: production guard rejects placeholders
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements-dev.txt
-
-      - name: A production env with placeholder secrets must fail to start
-        env:
-          APP_ENV: production
-          DATABASE_URL: sqlite:///./should-be-rejected.db
-        run: |
-          if python -c "
-          from app.config import settings, validate_production_settings
-          validate_production_settings(settings)
-          " 2>err.txt; then
-              echo "::error::validate_production_settings() accepted a SQLite URL in production"
-              exit 1
-          fi
-          echo "Correctly rejected:"
-          cat err.txt
