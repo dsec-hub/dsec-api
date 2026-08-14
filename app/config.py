@@ -208,6 +208,21 @@ class Settings(BaseSettings):
     DISCORD_BOT_TOKEN: str = ""
 
     # --- Games platform (arcade + Codle; surface = games.dsec.club) ---
+    # Master switch. False unmounts /games and /game-link entirely, so the routes
+    # 404 rather than answering — and the monthly draw cron stops firing.
+    #
+    # Set False in production on 2026-08-14: the games platform is parked while a
+    # decision is made about giving it its own box. It is the only surface that
+    # calls the API per user action (dsec-games fetches with `cache: "no-store"`,
+    # unlike the website, which serves from Vercel's CDN and makes ZERO API calls
+    # when idle), so it is also the only surface whose traffic scales with players
+    # rather than with publishing. Parking it removes essentially all per-user
+    # load from the API.
+    #
+    # Default True so local dev and the tests are unaffected; production turns it
+    # off through the environment. Flip it back and redeploy to restore — no code
+    # change, and no data is touched either way.
+    GAMES_ENABLED: bool = True
     # Public base URL of the playable web surface the bot deep-links players to
     # (e.g. /play -> ${GAMES_BASE_URL}/flappy-duck). Override per environment.
     GAMES_BASE_URL: str = "https://games.dsec.club"

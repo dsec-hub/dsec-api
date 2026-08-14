@@ -75,6 +75,10 @@ services:
   # Replaces the `crons` block in vercel.json ("0 1 1 * *" -> close-draw).
   # busybox crond keeps this in-compose rather than as a host systemd timer, so
   # the whole deployment stays in one file that moves with the repo.
+  #
+  # The only job here belongs to games. With GAMES_ENABLED=false the route is not
+  # mounted, so the container installs no crontab and idles instead of curling a
+  # 404 once a month and logging a failure someone would eventually investigate.
   cron:
     image: alpine:3
     depends_on: [api]
@@ -83,6 +87,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        if [ "$${GAMES_ENABLED:-true}" = "false" ]; then
+          echo "GAMES_ENABLED=false — no cron jobs to schedule; idling."
+          exec tail -f /dev/null
+        fi
         apk add --no-cache curl >/dev/null 2>&1
         echo "0 1 1 * * curl -fsS -m 300 -H \"Authorization: Bearer $$CRON_SECRET\" http://api:8000/games/cron/close-draw >> /var/log/cron.log 2>&1" > /etc/crontabs/root
         crond -f -l 8
