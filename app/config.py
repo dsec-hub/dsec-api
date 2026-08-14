@@ -148,7 +148,21 @@ class Settings(BaseSettings):
     # transport to specific hosts.
     MCP_ALLOWED_HOSTS: str = ""
 
-    # --- Supabase Storage (image media for events/projects) ---
+    # --- Media object storage ---
+    # Which backend holds the image binaries: "supabase" or "r2".
+    #
+    # Moving to Cloudflare R2 because R2 charges nothing for egress, which is the
+    # line item that grows with traffic and the one that would eventually force a
+    # paid Supabase tier. Storage itself is trivial either way — the whole library
+    # measured 13.7 MB across 150 files — so this is done now precisely BECAUSE it
+    # is small. The migration cost scales with file count, not bytes.
+    #
+    # Object paths are identical across backends (media_asset.webp_path /
+    # png_path), so switching backends only changes the URL prefix stored in
+    # webp_url / png_url. That is what makes this reversible: flip the variable
+    # back and re-point the URLs, the objects on the other side are untouched.
+    STORAGE_BACKEND: str = "supabase"
+
     # Server-side only. The service-role key bypasses RLS — never expose it to
     # the browser. Create a PUBLIC bucket named SUPABASE_STORAGE_BUCKET in the
     # Supabase dashboard. We do our own WebP/PNG conversion in Pillow, so the
@@ -156,6 +170,18 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     SUPABASE_STORAGE_BUCKET: str = "media"
+
+    # Cloudflare R2 (S3-compatible). The endpoint is derived from the account id.
+    # R2_PUBLIC_BASE_URL is what gets written into media_asset.*_url and served to
+    # browsers — either an r2.dev public-bucket URL or, preferably, a custom
+    # domain on the DSEC zone. It is NOT derivable from the account id, because a
+    # bucket is private until you explicitly expose it, so it must be set
+    # separately and the app refuses to use R2 without it.
+    R2_ACCOUNT_ID: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET: str = "dsec-media"
+    R2_PUBLIC_BASE_URL: str = ""
     MEDIA_MAX_UPLOAD_BYTES: int = 15_000_000  # 15 MB per source image
     MEDIA_MAX_DIMENSION: int = 2000  # longest side, px (downscaled if larger)
     # Hard byte budgets for the two derivatives. The Pillow pipeline steps down
