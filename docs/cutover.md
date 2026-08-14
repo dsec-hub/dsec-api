@@ -154,19 +154,47 @@ re-issues on every deploy and will hit Let's Encrypt's rate limits.
 no `sudo` (the user is in the `docker` group), but anything that genuinely
 requires root must be done as `ubuntu`, which has passwordless `sudo`.
 
-### Backups — not yet configured
+### Backups — installed 2026-08-14
 
-`deploy/backup-neon.sh` exists but is **not installed**. Neon has its own
-point-in-time recovery, so this is a second line of defence rather than the only
-one, but it should be set up:
+Nightly `pg_dump` of Neon, gzipped, 14-day retention, running as root cron at
+**03:15 UTC**. Verified end to end rather than merely installed: the first dump
+was 1 MB, passed `gzip -t`, and contains 58 tables and 22 `events` rows —
+matching production exactly.
+
+| | |
+|---|---|
+| script | `/usr/local/bin/dsec-backup` |
+| credentials | `/etc/dsec-backup.env` (root, mode 600) |
+| dumps | `/var/backups/dsec/dsec-<UTC timestamp>.sql.gz` |
+| log | `/var/log/dsec-backup.log` |
+
+`DATABASE_URL` lives in the env file rather than in the crontab line, because
+crontabs get pasted into chat when someone asks for help. **The value must stay
+single-quoted** — the Neon URL contains `&` (`channel_binding=require`), and an
+unquoted value backgrounds the line when sourced, which is exactly how the first
+attempt failed with a confusing "DATABASE_URL is not set".
+
+`pg_dump` is 18.4, matching Neon's server version. Keep them in step: dumping a
+newer server with an older `pg_dump` fails outright.
+
+**Still missing: the off-box copy.** `BACKUP_REMOTE` is unset, so the dumps only
+live on the VPS. That survives losing the *database* but not losing the *box*,
+which is half the point. To finish it:
 
 ```bash
 ssh ubuntu@51.161.130.240
-sudo cp /home/dsec/dsec-api/deploy/backup-neon.sh /usr/local/bin/dsec-backup
-sudo chmod +x /usr/local/bin/dsec-backup
-sudo crontab -e
-#  15 3 * * *  DATABASE_URL='postgresql://…' BACKUP_REMOTE='gdrive:dsec-backups' /usr/local/bin/dsec-backup
+sudo apt-get install -y rclone
+sudo rclone config          # add a remote, e.g. Google Drive named "gdrive"
+sudo sh -c "echo \"BACKUP_REMOTE='gdrive:dsec-backups'\" >> /etc/dsec-backup.env"
 ```
 
-**Set `BACKUP_REMOTE`.** Without it the backup survives loss of the database but
-not loss of the VPS, which is half the point.
+The script picks it up automatically — no code change.
+
+### Restoring
+
+```bash
+gunzip -c /var/backups/dsec/dsec-<stamp>.sql.gz | psql "<target-database-url>"
+```
+
+Restore into a **fresh Neon branch first**, never straight over production. The
+dump uses `--no-owner --no-acl`, so it loads without the original roles existing.
