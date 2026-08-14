@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 #
-# One-time hardening + Docker install for a fresh OVH VPS-1 (Ubuntu 24.04, SYD).
+# One-time hardening + Docker install for a fresh OVH VPS-1 (Ubuntu 26.04, SYD).
+#
+# The Docker repo line below derives its suite from /etc/os-release, so this
+# tracks whatever Ubuntu LTS the box runs. Verified against Docker's published
+# suites, which include 26.04's `resolute`.
 #
 # Run ONCE as root on the new box, before deploying anything:
 #   ssh root@<vps-ip> 'bash -s' < deploy/bootstrap-vps.sh <your-ssh-public-key>
