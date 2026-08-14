@@ -1,4 +1,4 @@
-"""Discord <-> account link REST API. Reads need `read`; writes need `write`.
+"""Discord <-> account link REST API. Reads need `read:games`; writes `write:games`.
 
 Flow: the portal calls POST /game-link/start to get a short code and shows it to
 the player, who runs `/link <code>` in Discord; the bot calls POST
@@ -29,7 +29,7 @@ def link_start(
     body: LinkStartRequest,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     player = service.upsert_player(
@@ -51,7 +51,7 @@ def link_claim(
     body: LinkClaimRequest,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     player = service.link_discord(
@@ -72,7 +72,7 @@ def link_status(
     account_id: int | None = None,
     discord_user_id: str | None = None,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if account_id is None and discord_user_id is None:

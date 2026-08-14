@@ -29,7 +29,7 @@ router = APIRouter()
 def list_games(
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> list[GameOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     return [GameOut.model_validate(g) for g in service.list_games(db)]
@@ -42,7 +42,7 @@ def get_leaderboard(
     window: str = "daily",
     limit: int = Query(20, le=100),
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     if window not in ("daily", "weekly", "cycle"):
@@ -56,7 +56,7 @@ def get_me(
     request: Request,
     account_id: int,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     summary = service.player_summary(db, account_id=account_id)
@@ -70,7 +70,7 @@ def get_draw(
     request: Request,
     period_key: str | None = None,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> dict:
     """Current (or named) draw-cycle standings — members-only, highest points
     wins. Powers the gift-card note on the leaderboard page."""
@@ -113,7 +113,7 @@ def get_round(
     slug: str,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     payload = service.public_round(db, slug)
@@ -128,7 +128,7 @@ def get_state(
     account_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:games")),
 ) -> dict:
     """A player's current state for a game (e.g. Codle's board so far), so a client
     can resume after a refresh. Engine-agnostic — no per-game branching."""
@@ -142,7 +142,7 @@ def post_attempt(
     body: AttemptRequest,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:games")),
 ) -> dict:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     try:

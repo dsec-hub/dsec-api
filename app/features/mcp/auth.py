@@ -23,7 +23,10 @@ from urllib.parse import parse_qs
 from fastapi import HTTPException
 
 from app.config import settings
-from app.core.apikeys import verify_key
+# has_scope moved to core so require_api_key (the REST layer) can use the same
+# algebra; re-exported here because this module was its original home and both
+# app code and tests import it from this path.
+from app.core.apikeys import has_scope, verify_key
 from app.core.ratelimit import limiter
 from app.core.usage import log_usage
 from app.db import SessionLocal
@@ -70,36 +73,6 @@ class MCPScopeError(Exception):
 
 def current_key() -> KeyContext | None:
     return _current_key.get()
-
-
-def has_scope(scopes: frozenset[str], required: str) -> bool:
-    """Does a credential carrying ``scopes`` satisfy ``required``?
-
-    Backward-compatible scope algebra so that every existing credential — the
-    ``dsec_live_`` keys and OAuth tokens that carry the legacy coarse
-    ``read``/``write`` — keeps working everywhere, while the new per-module
-    scopes (``read:sponsors``, ``write:finance``, …) provide tighter isolation:
-
-    - legacy ``"write"`` is a superset of every ``write:*``, every ``read:*`` and
-      legacy ``"read"``.
-    - legacy ``"read"`` is a superset of every ``read:*``.
-    - ``"write:X"`` satisfies ``"read:X"``.
-    - any other scope (``trigger``, ``ingest``, an exact module scope) matches
-      only itself.
-    """
-    if required in scopes:
-        return True
-    # Legacy "write" — the universal superset of every read/write scope, coarse
-    # or per-module, plus legacy "read".
-    if "write" in scopes and (required == "read" or required.startswith(("read:", "write:"))):
-        return True
-    # Legacy "read" covers every read scope (exact "read" handled above).
-    if "read" in scopes and required.startswith("read:"):
-        return True
-    # write:X implies read:X.
-    if required.startswith("read:") and f"write:{required[len('read:'):]}" in scopes:
-        return True
-    return False
 
 
 def require_scope(scope: str) -> KeyContext:

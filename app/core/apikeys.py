@@ -30,17 +30,60 @@ _hasher = PasswordHasher()
 # write  — create/update/archive workspace + domain data (no LLM spend).
 # trigger — actions that spend LLM credits (email drafting, meeting notes).
 # ingest — write DUSA weekly imports (membership / P&L) via /ingest.
-# read:<m>/write:<m> — per-module scopes for the "enforced" modules (Sponsors,
-#   Finance) so a key can be minted with exactly that module's access instead of
-#   blanket read/write. A legacy read/write key still satisfies them (see
-#   app/features/mcp/auth.py::has_scope).
+# read:<m>/write:<m> — per-module scopes so a key can be minted with exactly one
+#   module's access instead of blanket read/write. A legacy read/write key still
+#   satisfies them (see `has_scope` below).
 VALID_SCOPES = {
     "read", "write", "trigger", "ingest",
     "read:sponsors", "write:sponsors", "read:finance", "write:finance",
+    # The games surface (/games, /game-link) is public-facing: dsec-games holds
+    # a service key on a site anyone can reach. Blanket "write" was the only
+    # scope that satisfied POST /games/{slug}/attempt, so shipping games meant
+    # handing that site a key that could also write events, tasks, members,
+    # documents, links, projects, partners, people and meetings. These let it
+    # hold exactly the access it uses.
+    "read:games", "write:games",
 }
 
 # Length of the human-facing prefix used for DB lookup, e.g. "dsec_live_a1b2c3d4".
 _PREFIX_RANDOM_LEN = 8
+
+
+def has_scope(scopes, required: str) -> bool:
+    """Does a credential carrying ``scopes`` satisfy ``required``?
+
+    Backward-compatible scope algebra so that every existing credential — the
+    ``dsec_live_`` keys and OAuth tokens that carry the legacy coarse
+    ``read``/``write`` — keeps working everywhere, while the new per-module
+    scopes (``read:sponsors``, ``write:games``, …) provide tighter isolation:
+
+    - legacy ``"write"`` is a superset of every ``write:*``, every ``read:*`` and
+      legacy ``"read"``.
+    - legacy ``"read"`` is a superset of every ``read:*``.
+    - ``"write:X"`` satisfies ``"read:X"``.
+    - any other scope (``trigger``, ``ingest``, an exact module scope) matches
+      only itself.
+
+    This lives in core rather than in the MCP feature because ``require_api_key``
+    below is its most important caller — the REST API is the surface almost every
+    credential actually uses. It was previously defined in
+    ``app/features/mcp/auth.py``, which imports *from* this module, so the REST
+    layer could not reach it without a circular import and silently fell back to
+    an exact subset test. ``mcp.auth`` now re-exports it from here.
+    """
+    if required in scopes:
+        return True
+    # Legacy "write" — the universal superset of every read/write scope, coarse
+    # or per-module, plus legacy "read".
+    if "write" in scopes and (required == "read" or required.startswith(("read:", "write:"))):
+        return True
+    # Legacy "read" covers every read scope (exact "read" handled above).
+    if "read" in scopes and required.startswith("read:"):
+        return True
+    # write:X implies read:X.
+    if required.startswith("read:") and f"write:{required[len('read:'):]}" in scopes:
+        return True
+    return False
 
 
 @dataclass
@@ -117,10 +160,14 @@ def require_api_key(*required_scopes: str):
                 detail="invalid or revoked API key",
             )
         granted = set(row.scopes or [])
-        if not needed.issubset(granted):
+        # Scope-algebra-aware, NOT a plain subset test. A key holding legacy
+        # "write" must still satisfy a route asking for "write:games", or
+        # narrowing any route would revoke access from every key already issued.
+        missing = sorted(s for s in needed if not has_scope(granted, s))
+        if missing:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"key missing required scope(s): {sorted(needed - granted)}",
+                detail=f"key missing required scope(s): {missing}",
             )
         row.last_used_at = datetime.now(timezone.utc)
         db.commit()
