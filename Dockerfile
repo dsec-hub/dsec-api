@@ -51,9 +51,23 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
-# Single worker on purpose — see the note at the top of this file. Raise only if
-# a measurement says CPU is the bottleneck; the DB pool will bind first.
+# Two workers, one per vCPU. This was 1, on the reasoning that the DB pool would
+# bind before CPU did. Load-tested on the real VPS-1 (2 vCPU), and that reasoning
+# was wrong — the pool never saturated and the app was CPU-bound instead:
+#
+#   /website/events, external load, warm      1 worker    2 workers
+#     concurrency 10                            58 req/s    68 req/s
+#     concurrency 30                            61 req/s    82 req/s   (+34%)
+#     p50 at concurrency 30                     465 ms      334 ms
+#
+# The database is not the constraint: a Neon round trip from this box is 1.6 ms
+# and the events query 6.3 ms, against ~70 ms of total request time. The rest is
+# ORM + Pydantic work, which is CPU, so a second process buys real throughput.
+# /health (no DB, trivial serialisation) reaches ~530 req/s either way.
+#
+# Do not raise this past the core count: each worker holds its OWN DB pool, so
+# workers x (DB_POOL_SIZE + DB_MAX_OVERFLOW) = 2 x 20 = 40 connections to Neon.
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "1", \
+     "--workers", "2", \
      "--proxy-headers", "--forwarded-allow-ips", "*"]
