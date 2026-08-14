@@ -78,19 +78,30 @@ backups is how a club loses a year of data.
 
 ## First deploy
 
+The OVH Ubuntu image ships with an unprivileged **`ubuntu`** user and root SSH
+already disabled, so the bootstrap is piped through `sudo` rather than run as
+root. The `--` matters: without it `sudo` swallows the public-key argument as one
+of its own options.
+
 ```bash
-# 1. Harden the fresh box + install Docker (run once, as root)
-ssh root@<vps-ip> 'bash -s' < deploy/bootstrap-vps.sh "$(cat ~/.ssh/id_ed25519.pub)"
+# 1. Harden the fresh box + install Docker (run once)
+ssh ubuntu@<vps-ip> 'sudo bash -s -- "'"$(cat ~/.ssh/id_ed25519.pub)"'"' \
+    < deploy/bootstrap-vps.sh
 
 # 2. Verify key login in a SECOND terminal before closing the first
 ssh dsec@<vps-ip>
 
 # 3. Deploy
 git clone https://github.com/dsec-hub/dsec-api.git && cd dsec-api
-cp .env.production.example .env     # fill in real values
+cp .env.production.example .env     # fill in real values, then chmod 600 .env
 docker compose up -d --build
 docker compose logs -f api
 ```
+
+The box you provision may be branded `*.vps.ovh.ca` — that is OVH's billing
+subsidiary, not the datacentre. Confirm the location from the IP rather than the
+hostname: `51.161.130.240` geolocates to Sydney and answers a TCP connect in
+21–25 ms from Melbourne, where North America would be 200 ms+.
 
 `bootstrap-vps.sh` creates a `dsec` user, installs your key, disables root and
 password SSH (**only** if a key is present — it will not lock you out), enables

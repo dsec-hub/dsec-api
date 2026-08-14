@@ -6,8 +6,16 @@
 # tracks whatever Ubuntu LTS the box runs. Verified against Docker's published
 # suites, which include 26.04's `resolute`.
 #
-# Run ONCE as root on the new box, before deploying anything:
-#   ssh root@<vps-ip> 'bash -s' < deploy/bootstrap-vps.sh <your-ssh-public-key>
+# Run ONCE on the new box, before deploying anything. An OVH Ubuntu image ships
+# with an unprivileged `ubuntu` user and root SSH already disabled, so pipe it
+# through sudo rather than logging in as root:
+#
+#   ssh ubuntu@<vps-ip> 'sudo bash -s -- "<your-ssh-public-key>"' \
+#       < deploy/bootstrap-vps.sh
+#
+# Note the `--`: without it, sudo swallows the key argument as its own option.
+# If your image does permit root login, `ssh root@<vps-ip> 'bash -s' < …` also
+# works.
 #
 # Idempotent — safe to re-run. Deliberately conservative: it never removes an
 # existing key and never locks you out before verifying a key is present.
