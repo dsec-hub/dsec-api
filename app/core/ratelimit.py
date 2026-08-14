@@ -17,7 +17,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -45,29 +46,71 @@ class NeonRateLimiter:
     burst, one write per request — acceptable at committee scale."""
 
     def _bump_minute(self, db: Session, *, key_id: int | None, bucket: str) -> int:
+        """Increment this minute's counter and return the new value.
+
+        The increment is computed **in SQL** (``count = count + 1`` under the
+        row lock the UPDATE takes), not read into Python and written back.
+
+        That distinction is the whole point. The previous version did
+        ``SELECT`` → ``row.count += 1`` → ``commit``, so concurrent requests all
+        read the same value and wrote back the same value + 1, losing every
+        increment but one. Measured against the live box: 30 sequential requests
+        raised the counter by 30; **30 concurrent requests raised it by 9**. A
+        flood is concurrent by definition, so the per-IP limit failed in exactly
+        the case it exists for, while looking correct under manual testing.
+
+        `.first()` rather than `.scalar_one_or_none()`: the unique constraint is
+        on (key_id, window_start) and excludes `bucket`, and Postgres treats NULL
+        key_ids as distinct — so two per-IP requests that both miss can still
+        race in duplicate rows. Ordering by id makes every later request pick the
+        same one, so the duplicates stop mattering after the first instant
+        instead of splitting the count indefinitely.
+        """
         now = datetime.now(timezone.utc)
         window = _minute_window(now)
-        # `.first()`, not `.scalar_one_or_none()`: the unique constraint is on
-        # (key_id, window_start) and excludes `bucket`, and Postgres treats NULL
-        # key_ids as distinct — so concurrent per-IP (key_id=None) requests can
-        # race in duplicate rows for the same bucket+window. `.first()` tolerates
-        # that (picks one, increments it) instead of raising MultipleResultsFound
-        # and 500-ing the request.
-        row = db.execute(
-            select(RateLimit)
-            .where(
-                RateLimit.key_id == key_id,
-                RateLimit.bucket == bucket,
-                RateLimit.window_start == window,
-            )
-            .order_by(RateLimit.id)
+        where = (
+            RateLimit.key_id == key_id,
+            RateLimit.bucket == bucket,
+            RateLimit.window_start == window,
+        )
+        row_id = db.execute(
+            select(RateLimit.id).where(*where).order_by(RateLimit.id).limit(1)
         ).scalars().first()
-        if row is None:
-            row = RateLimit(key_id=key_id, bucket=bucket, window_start=window, count=0)
-            db.add(row)
-        row.count += 1
-        db.commit()
-        return row.count
+
+        if row_id is not None:
+            new_count = db.execute(
+                update(RateLimit)
+                .where(RateLimit.id == row_id)
+                .values(count=RateLimit.count + 1)
+                .returning(RateLimit.count)
+            ).scalar_one()
+            db.commit()
+            return new_count
+
+        # First request in this window. Two callers can reach here at once; the
+        # loser of that race retries as an update rather than inserting a second
+        # row or surfacing an IntegrityError to the request.
+        try:
+            new_count = db.execute(
+                insert(RateLimit)
+                .values(key_id=key_id, bucket=bucket, window_start=window, count=1)
+                .returning(RateLimit.count)
+            ).scalar_one()
+            db.commit()
+            return new_count
+        except IntegrityError:
+            db.rollback()
+            new_count = db.execute(
+                update(RateLimit)
+                .where(*where)
+                .values(count=RateLimit.count + 1)
+                .returning(RateLimit.count)
+            ).scalars().first()
+            db.commit()
+            # A concurrent DELETE (the sweeper) between the failed insert and
+            # this update would leave nothing to increment. Treat it as the first
+            # request of the window rather than 500-ing.
+            return new_count if new_count is not None else 1
 
     def check_request(self, db: Session, *, key_id: int | None, ip: str) -> None:
         # Authenticated callers are limited PER KEY, not per IP.
