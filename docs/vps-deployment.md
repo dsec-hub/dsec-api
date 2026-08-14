@@ -22,16 +22,26 @@ setting to fix. Anyone reading an older version of this document was told the
 VPS would deliver a ~20× speedup; it will not, because the speedup already
 happened.
 
-What a region pin **cannot** fix is what the move is actually for:
+A gateway Discord bot used to be the headline reason. **That plan was dropped on
+2026-08-14**, so it is no longer an argument for anything. The `DISCORD_*`
+variables are unset in every environment and the bot is not deployed.
 
-- A **gateway** Discord bot needs a persistent WebSocket. Serverless cannot host
-  one at any latency. The current `/discord/interactions` webhook bot is the only
-  shape Vercel could support.
-- **Cold starts** against Discord's 3 s interaction deadline.
+Be honest about what is left, because it is a shorter list than this document
+once claimed:
+
+- **Cold starts.** Measured after the region pin: a cold `/health` took
+  **4.79 s** against ~90 ms warm — on an endpoint that touches no database. A
+  long-lived process has none. This is now the strongest single argument, and it
+  is a real one for a low-traffic club site that idles most of the day.
+- **Long-running work.** Scrapers and bulk imports fit awkwardly inside a
+  serverless invocation limit and naturally on a box with a worker process.
 - **Flat, predictable cost** instead of per-invocation billing.
 
-Co-locating with the database remains a genuine benefit (~20–50 ms expected, a
-modest further gain on 121 ms), but it is no longer the argument.
+Measured side by side after the pin, the VPS is **faster on `/health`
+(66 ms vs 86 ms) and slightly slower on `/website/events` (124 ms vs 112 ms)** —
+both now sit in Sydney against the same pooled Neon endpoint, so database time
+dominates and there is no edge left to win. Anyone expecting a speed improvement
+from the cutover will not measure one.
 
 ## Shape
 
@@ -63,7 +73,7 @@ Measured, not estimated:
 | App imported, steady | **136 MB RSS** |
 | Peak during 12 MP image resize | **227 MB** |
 | Running container | **127 MiB** |
-| Everything incl. Caddy, cron, OS, a future gateway bot | **~1.1 GB** |
+| Everything incl. Caddy, cron and the OS (measured on the VPS) | **789 MB** |
 | OVH VPS-1 provides | **4 GB / 2 vCPU / 40 GB** |
 
 Roughly a quarter of the box. One uvicorn worker is correct: 188 of the ~202
@@ -115,10 +125,17 @@ Do not touch DNS until the box serves real traffic on its own address.
 1. Deploy with `API_DOMAIN` set to a throwaway hostname; confirm `/health`,
    `/website/events` and one authenticated route.
 2. Lower the `api.dsec.club` TTL to 60 s **at least an hour ahead**.
-3. Point `api.dsec.club` at the VPS. Caddy issues the certificate on first hit.
-4. Update the Discord **Interactions Endpoint URL** in the Developer Portal —
-   it is validated on save, so the new host must already be live.
-5. Verify all four front-ends, then keep the Vercel project alive for a week.
+3. Set `API_DOMAIN=api.dsec.club` in `.env` and `docker compose up -d` so Caddy
+   serves that vhost, then point the DNS record at the VPS. Caddy issues the
+   certificate on first hit. Doing this the other way round leaves the record
+   pointing at a box that answers with the wrong certificate.
+4. Verify all four front-ends, then keep the Vercel project alive for a week.
+
+Step 4 previously said to update the Discord **Interactions Endpoint URL** in
+the Developer Portal. That no longer applies — the Discord bot was dropped and
+no `DISCORD_*` variable is set in any environment. If Discord is ever revived,
+that step returns, and it must happen *after* the new host is live because
+Discord validates the URL when you save it.
 
 Rollback is one DNS record.
 
