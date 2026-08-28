@@ -131,6 +131,8 @@ def test_website_feed_no_auth(client, rw_key):
     assert len(pub) == 1 and pub[0]["title"] == "Campus Compass"
     stats = client.get("/website/stats").json()
     assert stats["projects_shipped"] == 1
+    # SEC-17: the unauthenticated public feed must never leak the club's finances.
+    assert "current_balance" not in stats
 
 
 def test_website_events_excludes_drafts(client, rw_key, db):
