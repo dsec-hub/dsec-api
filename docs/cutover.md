@@ -7,6 +7,18 @@ The step-by-step for the switch itself. Background and rationale live in
 keeps serving from Vercel until DNS moves, and Vercel stays deployed afterwards
 as a one-record rollback.
 
+> **Done — 2026-08-14.** `api.dsec.club` now resolves to `51.161.130.240` and is
+> served by Caddy on the VPS with a Let's Encrypt certificate valid to
+> 12 Nov 2026. Verified: `/health` 69 ms, `/website/events` returning 12 events,
+> admin basic auth 200, all four front-ends 200, `/games` 404 (parked). The
+> Vercel project is still deployed as the rollback.
+>
+> **Steps 2 and 3 ran out of order.** DNS was changed before Caddy was pointed at
+> the domain, leaving a window where `api.dsec.club` resolved to the box while
+> nothing there answered for that hostname. Recovery was one command and the
+> certificate issued immediately, but on a busier service that window is an
+> outage — keep the order.
+
 ---
 
 ## Before you start
@@ -14,10 +26,35 @@ as a one-record rollback.
 | | |
 |---|---|
 | VPS | `51.161.130.240` (`vps-8edf3981.vps.ovh.ca`), Sydney |
-| SSH | `ssh dsec@51.161.130.240` — key only, no password |
+| SSH | `ssh dsec-vps` — key only, no password (see below) |
 | App dir | `~/dsec-api` on the box |
 | DNS | Cloudflare (`rose`/`kolton.ns.cloudflare.com`) |
 | Current record | `api.dsec.club` CNAME → `606dd6d52ec2b90c.vercel-dns-017.com` |
+
+### SSH will fail without this
+
+The deploy key has a non-default filename, so a bare `ssh dsec@51.161.130.240`
+never offers it and dies with **`Permission denied (publickey)`** — and any
+commands you pasted after it then run on your laptop instead, which is confusing
+and occasionally destructive. Add this to `~/.ssh/config` once:
+
+```
+Host dsec-vps 51.161.130.240
+    HostName 51.161.130.240
+    User dsec
+    IdentityFile ~/.ssh/id_ed25519_panoptic
+    IdentitiesOnly yes
+
+Host dsec-vps-root
+    HostName 51.161.130.240
+    User ubuntu
+    IdentityFile ~/.ssh/id_ed25519_panoptic
+    IdentitiesOnly yes
+```
+
+`dsec-vps` deploys (Docker, no sudo needed). `dsec-vps-root` is the `ubuntu`
+user, the only one with working sudo — `dsec` was created with
+`--disabled-password` and cannot authenticate to it.
 
 Confirm the box is healthy on its own hostname first. Everything below assumes
 this returns 200:
@@ -154,19 +191,47 @@ re-issues on every deploy and will hit Let's Encrypt's rate limits.
 no `sudo` (the user is in the `docker` group), but anything that genuinely
 requires root must be done as `ubuntu`, which has passwordless `sudo`.
 
-### Backups — not yet configured
+### Backups — installed 2026-08-14
 
-`deploy/backup-neon.sh` exists but is **not installed**. Neon has its own
-point-in-time recovery, so this is a second line of defence rather than the only
-one, but it should be set up:
+Nightly `pg_dump` of Neon, gzipped, 14-day retention, running as root cron at
+**03:15 UTC**. Verified end to end rather than merely installed: the first dump
+was 1 MB, passed `gzip -t`, and contains 58 tables and 22 `events` rows —
+matching production exactly.
+
+| | |
+|---|---|
+| script | `/usr/local/bin/dsec-backup` |
+| credentials | `/etc/dsec-backup.env` (root, mode 600) |
+| dumps | `/var/backups/dsec/dsec-<UTC timestamp>.sql.gz` |
+| log | `/var/log/dsec-backup.log` |
+
+`DATABASE_URL` lives in the env file rather than in the crontab line, because
+crontabs get pasted into chat when someone asks for help. **The value must stay
+single-quoted** — the Neon URL contains `&` (`channel_binding=require`), and an
+unquoted value backgrounds the line when sourced, which is exactly how the first
+attempt failed with a confusing "DATABASE_URL is not set".
+
+`pg_dump` is 18.4, matching Neon's server version. Keep them in step: dumping a
+newer server with an older `pg_dump` fails outright.
+
+**Still missing: the off-box copy.** `BACKUP_REMOTE` is unset, so the dumps only
+live on the VPS. That survives losing the *database* but not losing the *box*,
+which is half the point. To finish it:
 
 ```bash
 ssh ubuntu@51.161.130.240
-sudo cp /home/dsec/dsec-api/deploy/backup-neon.sh /usr/local/bin/dsec-backup
-sudo chmod +x /usr/local/bin/dsec-backup
-sudo crontab -e
-#  15 3 * * *  DATABASE_URL='postgresql://…' BACKUP_REMOTE='gdrive:dsec-backups' /usr/local/bin/dsec-backup
+sudo apt-get install -y rclone
+sudo rclone config          # add a remote, e.g. Google Drive named "gdrive"
+sudo sh -c "echo \"BACKUP_REMOTE='gdrive:dsec-backups'\" >> /etc/dsec-backup.env"
 ```
 
-**Set `BACKUP_REMOTE`.** Without it the backup survives loss of the database but
-not loss of the VPS, which is half the point.
+The script picks it up automatically — no code change.
+
+### Restoring
+
+```bash
+gunzip -c /var/backups/dsec/dsec-<stamp>.sql.gz | psql "<target-database-url>"
+```
+
+Restore into a **fresh Neon branch first**, never straight over production. The
+dump uses `--no-owner --no-acl`, so it loads without the original roles existing.
