@@ -1,0 +1,58 @@
+# Run the test suite on every push to main and every PR.
+#
+# This repo carries the most risk of the five — it owns the Alembic schema for a
+# database three other apps read, and it is about to move off Vercel onto a VPS
+# where a bad deploy is not one click of rollback. It had 216 tests that nothing
+# enforced.
+#
+# The suite needs NO external services: tests/conftest.py points DATABASE_URL at
+# a throwaway SQLite file and stubs the LLM calls before importing the app. So
+# there is nothing to provision here and no secret to leak into a fork PR.
+#
+# A second job asserting that validate_production_settings() rejects placeholder
+# secrets belongs with the VPS migration, not here: on main that guard still
+# keys off VERCEL=1 alone, so there is nothing to assert until APP_ENV lands.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes an in-flight run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile (python:3.13-slim), which is the real deploy
+          # target now. Keep the two in step — a version skew here means CI
+          # passes against an interpreter production does not run.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      # requirements-dev.txt includes requirements.txt, so this installs the
+      # runtime deps at their pinned versions too. Those pins are deliberate
+      # (see the header of requirements.txt — an unpinned mcp took the API down
+      # for ~20 hours), which makes this install a check on the pins as well.
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-dev.txt
+
+      - run: python -m pytest
