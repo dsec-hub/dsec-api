@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import secrets
 from typing import Callable
 
@@ -19,17 +18,12 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.config import is_production, settings
 from app.core.net import client_ip
 from app.core.ratelimit import limiter
 from app.db import get_db
 
 _basic = HTTPBasic()
-
-
-def _is_production() -> bool:
-    """True when running on Vercel (which always exports ``VERCEL=1``)."""
-    return os.environ.get("VERCEL") == "1"
 
 
 def require_agent_secret(x_agent_secret: str | None = Header(default=None)) -> None:
@@ -77,7 +71,7 @@ def require_cron_secret(authorization: str | None = Header(default=None)) -> Non
     """
     expected = settings.CRON_SECRET
     if not expected:
-        if _is_production():
+        if is_production():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="cron is not configured",
@@ -113,7 +107,7 @@ async def _verify_discord_ed25519(request: Request) -> None:
 
     public_key = settings.DISCORD_PUBLIC_KEY
     if not public_key:
-        if _is_production():
+        if is_production():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="discord webhook is not configured",
@@ -169,7 +163,7 @@ def verify_webhook_signature(mode: str) -> Callable:
             # reach a handler that writes to the DB (e.g. the Cal.com webhook
             # creates a SponsorLead). In dev/test the stub stays reachable so it
             # can be exercised without a secret.
-            if _is_production():
+            if is_production():
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=f"{mode} webhook is not configured",
