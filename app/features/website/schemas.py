@@ -305,7 +305,6 @@ class SiteStats(BaseModel):
     dusa_members: int
     events_this_year: int
     projects_shipped: int
-    current_balance: float | None
 
 
 class PublicSponsorPackage(BaseModel):

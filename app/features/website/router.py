@@ -36,7 +36,6 @@ from app.models import (
     EventPartner,
     EventSpeaker,
     EventSponsor,
-    FinanceReport,
     FlagshipSignup,
     MediaAsset,
     Member,
@@ -922,13 +921,9 @@ def public_stats(request: Request, db: Session = Depends(get_db)) -> SiteStats:
         .where(Project.archived.is_(False),
                Project.status.in_(["Completed", "Showcased"]))
     ).scalar_one()
-    report = db.execute(
-        select(FinanceReport).where(FinanceReport.is_current.is_(True))
-    ).scalar_one_or_none()
     return SiteStats(
         members=members or 0,
         dusa_members=dusa or 0,
         events_this_year=events_year or 0,
         projects_shipped=shipped or 0,
-        current_balance=float(report.closing_balance) if report and report.closing_balance is not None else None,
     )
