@@ -23,7 +23,7 @@ router = APIRouter()
 def summary(
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:finance")),
 ) -> FinanceSummary:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     return FinanceSummary(**service.finances_summary(db))
@@ -36,7 +36,7 @@ def transactions(
     limit: int = Query(100, le=500),
     offset: int = 0,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:finance")),
 ) -> list[TransactionOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_transactions(db, kind=kind, limit=limit, offset=offset)
@@ -48,7 +48,7 @@ def reports(
     request: Request,
     limit: int = Query(20, le=100),
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:finance")),
 ) -> list[ReportOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_reports(db, limit=limit)
@@ -61,7 +61,7 @@ def set_budget(
     body: SetBudget,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:finance")),
 ) -> EventBudgetOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     ev = service.set_event_budget(db, event_id, body.budget_aud, body.grant_rate)

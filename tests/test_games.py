@@ -362,3 +362,158 @@ def test_link_flow_binds_discord_to_account(client, rw_key, ro_key, db):
     assert status["linked"] is True and status["account_id"] == 60
     # a bogus code claims nothing
     assert client.post("/game-link/claim", json={"discord_user_id": "1", "code": "DUCK-0000-0000"}, headers=_h(rw_key)).status_code == 404
+
+
+# --- per-module games scopes -------------------------------------------------
+#
+# The games surface is the only public-facing consumer of a service key:
+# dsec-games runs on a site anyone can reach. Until read:games/write:games
+# existed, POST /games/{slug}/attempt required blanket "write", so the only key
+# that worked there could also write finance, sponsors, members and everything
+# else. These tests pin both halves of the fix — that a narrow key is now
+# sufficient, and that it is genuinely narrow.
+
+
+def test_narrow_games_key_can_play(client, db):
+    """read:games + write:games is enough for the whole dsec-games surface."""
+    narrow = _make_key(db, ["read:games", "write:games"], "games-only")
+
+    assert client.get("/games", headers=_h(narrow)).status_code == 200
+    assert client.get("/games/leaderboard?window=daily", headers=_h(narrow)).status_code == 200
+    assert client.get("/games/codle/round", headers=_h(narrow)).status_code == 200
+    assert client.get("/games/codle/state?account_id=1", headers=_h(narrow)).status_code == 200
+
+    started = client.post(
+        "/game-link/start",
+        json={"account_id": 71, "email": "narrow@uni.edu", "display_name": "Narrow"},
+        headers=_h(narrow),
+    )
+    assert started.status_code == 200
+
+
+def test_narrow_games_key_cannot_touch_other_modules(client, db):
+    """The point of the narrow key: it must not write anything but games.
+
+    403 (not 401) — the key authenticates fine, it simply lacks the scope. A
+    404/405 here would mean the assertion is passing for the wrong reason, so
+    the status is checked exactly.
+    """
+    narrow = _make_key(db, ["read:games", "write:games"], "games-only-2")
+
+    r = client.post("/sponsors", json={"name": "Acme"}, headers=_h(narrow))
+    assert r.status_code == 403, r.text
+    assert "write" in r.json()["detail"]
+
+    r = client.post(
+        "/finance/events/1/budget", json={"allocated": 100}, headers=_h(narrow)
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_read_games_alone_cannot_write(client, db):
+    """write:games must not be implied by read:games."""
+    ro = _make_key(db, ["read:games"], "games-ro")
+    r = client.post(
+        "/games/codle/attempt",
+        json={"account_id": 1, "payload": {"guess": "print"}},
+        headers=_h(ro),
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_legacy_blanket_write_still_satisfies_narrowed_routes(client, db):
+    """Backward compatibility — the reason require_api_key uses has_scope.
+
+    Every key issued before per-module scopes existed carries blanket
+    read/write. Narrowing the games routes must not revoke their access, or the
+    change would break dsec-app and dsec-hub the moment it deployed.
+    """
+    legacy = _make_key(db, ["read", "write"], "legacy")
+    assert client.get("/games", headers=_h(legacy)).status_code == 200
+    assert client.get("/games/codle/round", headers=_h(legacy)).status_code == 200
+    started = client.post(
+        "/game-link/start",
+        json={"account_id": 72, "email": "legacy@uni.edu", "display_name": "Legacy"},
+        headers=_h(legacy),
+    )
+    assert started.status_code == 200
+
+    # legacy "read" alone reaches the reads but not the writes
+    legacy_ro = _make_key(db, ["read"], "legacy-ro")
+    assert client.get("/games", headers=_h(legacy_ro)).status_code == 200
+    assert client.post(
+        "/game-link/start",
+        json={"account_id": 73, "email": "x@uni.edu", "display_name": "X"},
+        headers=_h(legacy_ro),
+    ).status_code == 403
+
+
+# --- per-module finance / sponsors keys --------------------------------------
+#
+# read:finance and friends were mintable and documented long before this, but no
+# REST route asked for them, so a key holding only those scopes was authenticated
+# and then rejected by every finance endpoint. The scopes existed and did
+# nothing. These pin that they now work, and that they stay isolated from each
+# other — which is the entire point of calling Finance and Sponsors "enforced".
+
+
+def test_finance_only_key_reaches_finance_and_nothing_else(client, db):
+    fin = _make_key(db, ["read:finance", "write:finance"], "fin")
+
+    assert client.get("/finance/summary", headers=_h(fin)).status_code == 200
+
+    # ...but not the other enforced module
+    r = client.post("/sponsors", json={"name": "Acme"}, headers=_h(fin))
+    assert r.status_code == 403, r.text
+    assert client.get("/sponsors", headers=_h(fin)).status_code == 403
+
+
+def test_sponsors_only_key_reaches_the_whole_sponsors_module(client, db):
+    """The module is sponsors + contacts + packages + leads, per the MCP catalog
+    description of the scope. All four live under different route prefixes, so
+    it is easy for one to be left behind."""
+    sp = _make_key(db, ["read:sponsors", "write:sponsors"], "sp")
+
+    assert client.get("/sponsors", headers=_h(sp)).status_code == 200
+    assert client.get("/sponsor-packages", headers=_h(sp)).status_code == 200
+    assert client.get("/sponsor-leads", headers=_h(sp)).status_code == 200
+
+    # and not finance
+    assert client.get("/finance/summary", headers=_h(sp)).status_code == 403
+
+
+def test_read_finance_alone_cannot_write_finance(client, db):
+    ro = _make_key(db, ["read:finance"], "fin-ro")
+    assert client.get("/finance/summary", headers=_h(ro)).status_code == 200
+    r = client.post(
+        "/finance/events/1/budget", json={"allocated": 100}, headers=_h(ro)
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_public_sponsor_lead_intake_needs_no_key(client):
+    """POST /sponsor-leads is the dsec-website contact form. Narrowing the rest
+    of the module must not have dragged an API key requirement onto it."""
+    r = client.post(
+        "/sponsor-leads",
+        json={"source": "enquiry", "email": "hello@acme.com", "company": "Acme"},
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_legacy_blanket_keys_still_reach_finance_and_sponsors(client, db):
+    """Backward compatibility for the narrowed enforced modules.
+
+    dsec-hub and dsec-app hold blanket read/write keys. If narrowing these
+    routes revoked their access, the change would break both on deploy.
+    """
+    legacy = _make_key(db, ["read", "write"], "legacy-enforced")
+    assert client.get("/finance/summary", headers=_h(legacy)).status_code == 200
+    assert client.get("/sponsors", headers=_h(legacy)).status_code == 200
+    assert client.get("/sponsor-packages", headers=_h(legacy)).status_code == 200
+
+    legacy_ro = _make_key(db, ["read"], "legacy-enforced-ro")
+    assert client.get("/finance/summary", headers=_h(legacy_ro)).status_code == 200
+    assert client.post(
+        "/sponsors", json={"name": "Acme"}, headers=_h(legacy_ro)
+    ).status_code == 403
