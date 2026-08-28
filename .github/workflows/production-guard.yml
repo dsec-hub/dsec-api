@@ -92,3 +92,72 @@ jobs:
           validate_production_settings(Settings())
           print('accepted a well-formed production configuration')
           "
+
+  # SEC-03. validate_production_settings (above) is one guard; app/auth.py holds
+  # three more — the cron, Discord and Cal.com webhook deps — that fail CLOSED in
+  # production and open in dev. They used to key off VERCEL=1 ALONE, which is
+  # unset on the VPS, so on the live box all three silently took the dev / open
+  # path. is_production() now keys off APP_ENV; this job is the tripwire if anyone
+  # reverts that or re-points a guard at VERCEL.
+  auth-guards:
+    name: auth guards fail closed under APP_ENV=production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile (python:3.13-slim) — the real deploy target.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+
+      # Blank CRON_SECRET / DISCORD_PUBLIC_KEY / CALCOM_WEBHOOK_SECRET under
+      # APP_ENV=production must each raise 503, never pass through.
+      - name: cron, discord and calcom deps all raise 503
+        env:
+          APP_ENV: production
+          # SQLite is fine here: this imports app.auth and never calls
+          # validate_production_settings(), so the DB is only touched to build the
+          # engine at import. The three webhook secrets are left blank on purpose.
+          DATABASE_URL: sqlite:///./guard-check.db
+        run: |
+          python - <<'PY'
+          import asyncio
+          from types import SimpleNamespace
+
+          from fastapi import HTTPException
+
+          from app.auth import require_cron_secret, verify_webhook_signature
+          from app.config import is_production
+
+          assert is_production(), "APP_ENV=production must make is_production() true"
+
+          _req = SimpleNamespace(headers={})
+
+
+          def expect_503(name, call):
+              try:
+                  result = call()
+                  if asyncio.iscoroutine(result):
+                      asyncio.run(result)
+              except HTTPException as exc:
+                  assert exc.status_code == 503, f"{name}: expected 503, got {exc.status_code}"
+                  print(f"{name}: correctly failed closed (503)")
+                  return
+              raise SystemExit(f"::error::{name} guard did NOT fail closed - no 503 raised")
+
+
+          expect_503("cron", lambda: require_cron_secret(None))
+          expect_503("discord", lambda: verify_webhook_signature("discord")(_req))
+          expect_503("calcom", lambda: verify_webhook_signature("calcom")(_req))
+
+          print("all three production auth guards fail closed")
+          PY

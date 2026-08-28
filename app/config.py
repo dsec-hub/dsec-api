@@ -331,4 +331,17 @@ def validate_production_settings(s: "Settings | None" = None) -> None:
         )
 
 
+def is_production() -> bool:
+    """True on the VPS (``APP_ENV=production``) or the legacy Vercel deploy.
+
+    The single definition of "are we live"; the auth guards fail CLOSED when it
+    is true. It used to live in ``app.auth`` keyed off ``VERCEL=1`` alone, which
+    returned False on the VPS (Vercel exports ``VERCEL``; the VPS does not) and so
+    silently put every production auth check on its dev / fail-open path. Defined
+    here, next to ``validate_production_settings`` — which already keys off
+    ``APP_ENV`` — so there is one predicate and never a second one to forget.
+    """
+    return settings.APP_ENV.lower() == "production" or os.environ.get("VERCEL") == "1"
+
+
 settings = get_settings()

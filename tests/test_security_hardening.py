@@ -11,8 +11,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
-from app.config import Settings, validate_production_settings
+from app.auth import require_cron_secret
+from app.config import Settings, is_production, settings, validate_production_settings
 from app.core.net import client_ip
 
 
@@ -113,3 +115,61 @@ def test_production_config_guard_noop_outside_vercel(monkeypatch):
     monkeypatch.delenv("VERCEL", raising=False)
     insecure = Settings(AGENT_SECRET="change-me-agent-secret")
     validate_production_settings(insecure)  # no-op locally
+
+
+# --- SEC-03: the production predicate keys off APP_ENV, and the three auth ---
+# guards fail closed on the VPS (where VERCEL is unset). ----------------------
+
+
+def test_is_production_keys_off_app_env(monkeypatch):
+    """On the VPS APP_ENV=production and there is no VERCEL var — the whole
+    reason the old VERCEL-only predicate silently disabled every guard."""
+    monkeypatch.delenv("VERCEL", raising=False)
+
+    monkeypatch.setattr(settings, "APP_ENV", "development")
+    assert is_production() is False
+
+    monkeypatch.setattr(settings, "APP_ENV", "production")  # the VPS
+    assert is_production() is True
+
+    monkeypatch.setattr(settings, "APP_ENV", "development")  # the legacy path
+    monkeypatch.setenv("VERCEL", "1")
+    assert is_production() is True
+
+
+def test_cron_dep_fails_closed_in_production_without_secret(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setattr(settings, "CRON_SECRET", "")
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    with pytest.raises(HTTPException) as exc:
+        require_cron_secret(None)
+    assert exc.value.status_code == 503
+
+
+def test_discord_webhook_fails_closed_in_production_without_key(client, monkeypatch):
+    """The core SEC-03 bug: on the live VPS a forged, unsigned interaction reached
+    the handler with a 200. Under APP_ENV=production with a blank key it must 503."""
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setattr(settings, "DISCORD_PUBLIC_KEY", "")
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    resp = client.post("/discord/interactions", json={"type": 1})
+    assert resp.status_code == 503
+
+
+def test_discord_webhook_reachable_in_dev_without_key(client, monkeypatch):
+    """Outside production a blank key stays passthrough so the endpoint is
+    exercisable — PONG, not 503."""
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setattr(settings, "APP_ENV", "development")
+    resp = client.post("/discord/interactions", json={"type": 1})
+    assert resp.status_code == 200 and resp.json() == {"type": 1}
+
+
+def test_calcom_webhook_fails_closed_in_production_via_app_env(client, monkeypatch):
+    """Cal.com already failed closed under VERCEL=1; prove the APP_ENV path too,
+    since that is what the VPS actually sets."""
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setattr(settings, "CALCOM_WEBHOOK_SECRET", "")
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    resp = client.post("/calcom/webhook", json={"triggerEvent": "BOOKING_CREATED"})
+    assert resp.status_code == 503
