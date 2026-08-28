@@ -206,3 +206,80 @@ def test_media_upload_runs_pipeline_then_503_when_storage_unconfigured(client, r
         headers=_h(rw_key),
     )
     assert r.status_code == 503
+
+
+# --- storage backend selection ----------------------------------------------
+#
+# The binaries moved from Supabase Storage to Cloudflare R2. Both backends sit
+# behind the same three functions, and `media_asset` stores the object path
+# separately from the public URL — so switching backends only changes the URL
+# prefix, and the paths carry over untouched. These pin the parts that are easy
+# to get silently wrong: which backend a given setting selects, and that an
+# unconfigured backend fails loudly at the boundary instead of writing a broken
+# URL into the database.
+
+from app.features.media import storage  # noqa: E402
+
+
+def test_r2_refuses_when_unconfigured_and_names_what_is_missing(monkeypatch):
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "r2")
+    for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+                "R2_PUBLIC_BASE_URL"):
+        monkeypatch.setattr(storage.settings, var, "")
+    storage._r2_client.cache_clear()
+    with pytest.raises(storage.StorageNotConfigured) as exc:
+        storage.upload_object("event/1/a.webp", b"x", "image/webp")
+    msg = str(exc.value)
+    # Every missing name is listed — a partial config should say which half.
+    for var in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"):
+        assert var in msg
+    storage._r2_client.cache_clear()
+
+
+def test_r2_requires_public_base_url_even_when_credentials_are_present(monkeypatch):
+    """A bucket is private until explicitly exposed, so the public base URL is
+    not derivable from the account id. Without it the app would upload happily
+    and write an unreachable URL — a failure that only shows up later as a
+    broken image in a browser."""
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "r2")
+    monkeypatch.setattr(storage.settings, "R2_ACCOUNT_ID", "acct")
+    monkeypatch.setattr(storage.settings, "R2_ACCESS_KEY_ID", "key")
+    monkeypatch.setattr(storage.settings, "R2_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setattr(storage.settings, "R2_PUBLIC_BASE_URL", "")
+    storage._r2_client.cache_clear()
+    with pytest.raises(storage.StorageNotConfigured) as exc:
+        storage.upload_object("event/1/a.webp", b"x", "image/webp")
+    assert "R2_PUBLIC_BASE_URL" in str(exc.value)
+    storage._r2_client.cache_clear()
+
+
+def test_public_url_joins_cleanly_regardless_of_slashes(monkeypatch):
+    monkeypatch.setattr(storage.settings, "R2_PUBLIC_BASE_URL", "https://media.dsec.club/")
+    assert storage._r2_public_url("event/1/a.webp") == "https://media.dsec.club/event/1/a.webp"
+    monkeypatch.setattr(storage.settings, "R2_PUBLIC_BASE_URL", "https://media.dsec.club")
+    assert storage._r2_public_url("/event/1/a.webp") == "https://media.dsec.club/event/1/a.webp"
+
+
+def test_backend_dispatch_selects_the_configured_one(monkeypatch):
+    calls = []
+    monkeypatch.setattr(storage, "_r2_upload", lambda p, d, c: calls.append("r2") or "r2-url")
+    monkeypatch.setattr(storage, "_supabase_upload", lambda p, d, c: calls.append("supa") or "supa-url")
+
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "r2")
+    assert storage.upload_object("p", b"x", "image/webp") == "r2-url"
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "supabase")
+    assert storage.upload_object("p", b"x", "image/webp") == "supa-url"
+    # Unset/unknown must fall back to Supabase, not blow up mid-request.
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "")
+    assert storage.upload_object("p", b"x", "image/webp") == "supa-url"
+    assert calls == ["r2", "supa", "supa"]
+
+
+def test_delete_is_best_effort_and_never_raises(monkeypatch):
+    """Cleanup must not block deleting the owning DB row."""
+    monkeypatch.setattr(storage.settings, "STORAGE_BACKEND", "r2")
+    def boom(paths): raise RuntimeError("r2 down")
+    monkeypatch.setattr(storage, "_r2_delete", boom)
+    storage.delete_objects(["a/b.webp"])          # must not raise
+    storage.delete_objects([])                     # no-op, must not call the backend
+    storage.delete_objects(["", None])             # filtered out

@@ -22,6 +22,15 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+    # --- Deployment environment ---
+    # Drives validate_production_settings(). Historically that check keyed off
+    # Vercel's `VERCEL=1`, which silently disabled every production guard the
+    # moment the app moved to its own server. Set APP_ENV=production on the VPS
+    # (docker compose does this) so the insecure-default checks still run.
+    APP_ENV: str = Field(
+        default_factory=lambda: "production" if os.environ.get("VERCEL") == "1" else "development"
+    )
+
     # --- Shared agent / Apps Script auth ---
     # NOTE: the literal defaults below double as the "insecure default" sentinels
     # checked by validate_production_settings() — keep them in sync.
@@ -50,12 +59,29 @@ class Settings(BaseSettings):
     RUN_MIGRATIONS_ON_STARTUP: bool = Field(
         default_factory=lambda: os.environ.get("VERCEL") != "1"
     )
+    # SQLAlchemy pool sizing. The old hard-coded 5/2 was chosen for serverless,
+    # where N ephemeral function instances EACH held a pool and the risk was
+    # exhausting Neon's connection limit. One long-lived process inverts that:
+    # 5 becomes the throughput ceiling, since Starlette runs the ~190 sync
+    # endpoints in a 40-thread pool that all queue on those 5 connections.
+    DB_POOL_SIZE: int = 15
+    DB_MAX_OVERFLOW: int = 5
+    DB_POOL_RECYCLE: int = 300
 
     # --- API keys & rate limiting ---
     API_KEY_PREFIX: str = "dsec_live_"
-    RATE_LIMIT_PER_MIN: int = 60
+    # Per-key ceiling for AUTHENTICATED callers. 60/min (= 1 req/s) was calibrated
+    # for humans holding keys; it is far too tight for our four Next.js apps, which
+    # call this API server-side and can fan out to several endpoints in a single
+    # page render. 300/min (= 5 req/s) per key still caps runaway loops while
+    # leaving normal dashboard use comfortable. See ratelimit.check_request for
+    # why authenticated traffic is no longer also charged to the per-IP bucket.
+    RATE_LIMIT_PER_MIN: int = 300
     RATE_LIMIT_TRIGGER_PER_DAY: int = 200
     GLOBAL_DAILY_LLM_CAP: int = 1000
+    # Per-IP ceiling, applied to UNAUTHENTICATED traffic only (public /website
+    # feed, OAuth, webhooks). Depends on the reverse proxy setting a trustworthy
+    # X-Real-IP — see app/core/net.py.
     RATE_LIMIT_PER_IP_PER_MIN: int = 120
     MAX_REQUEST_BYTES: int = 100_000
 
@@ -122,7 +148,21 @@ class Settings(BaseSettings):
     # transport to specific hosts.
     MCP_ALLOWED_HOSTS: str = ""
 
-    # --- Supabase Storage (image media for events/projects) ---
+    # --- Media object storage ---
+    # Which backend holds the image binaries: "supabase" or "r2".
+    #
+    # Moving to Cloudflare R2 because R2 charges nothing for egress, which is the
+    # line item that grows with traffic and the one that would eventually force a
+    # paid Supabase tier. Storage itself is trivial either way — the whole library
+    # measured 13.7 MB across 150 files — so this is done now precisely BECAUSE it
+    # is small. The migration cost scales with file count, not bytes.
+    #
+    # Object paths are identical across backends (media_asset.webp_path /
+    # png_path), so switching backends only changes the URL prefix stored in
+    # webp_url / png_url. That is what makes this reversible: flip the variable
+    # back and re-point the URLs, the objects on the other side are untouched.
+    STORAGE_BACKEND: str = "supabase"
+
     # Server-side only. The service-role key bypasses RLS — never expose it to
     # the browser. Create a PUBLIC bucket named SUPABASE_STORAGE_BUCKET in the
     # Supabase dashboard. We do our own WebP/PNG conversion in Pillow, so the
@@ -130,6 +170,18 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     SUPABASE_STORAGE_BUCKET: str = "media"
+
+    # Cloudflare R2 (S3-compatible). The endpoint is derived from the account id.
+    # R2_PUBLIC_BASE_URL is what gets written into media_asset.*_url and served to
+    # browsers — either an r2.dev public-bucket URL or, preferably, a custom
+    # domain on the DSEC zone. It is NOT derivable from the account id, because a
+    # bucket is private until you explicitly expose it, so it must be set
+    # separately and the app refuses to use R2 without it.
+    R2_ACCOUNT_ID: str = ""
+    R2_ACCESS_KEY_ID: str = ""
+    R2_SECRET_ACCESS_KEY: str = ""
+    R2_BUCKET: str = "dsec-media"
+    R2_PUBLIC_BASE_URL: str = ""
     MEDIA_MAX_UPLOAD_BYTES: int = 15_000_000  # 15 MB per source image
     MEDIA_MAX_DIMENSION: int = 2000  # longest side, px (downscaled if larger)
     # Hard byte budgets for the two derivatives. The Pillow pipeline steps down
@@ -182,6 +234,21 @@ class Settings(BaseSettings):
     DISCORD_BOT_TOKEN: str = ""
 
     # --- Games platform (arcade + Codle; surface = games.dsec.club) ---
+    # Master switch. False unmounts /games and /game-link entirely, so the routes
+    # 404 rather than answering — and the monthly draw cron stops firing.
+    #
+    # Set False in production on 2026-08-14: the games platform is parked while a
+    # decision is made about giving it its own box. It is the only surface that
+    # calls the API per user action (dsec-games fetches with `cache: "no-store"`,
+    # unlike the website, which serves from Vercel's CDN and makes ZERO API calls
+    # when idle), so it is also the only surface whose traffic scales with players
+    # rather than with publishing. Parking it removes essentially all per-user
+    # load from the API.
+    #
+    # Default True so local dev and the tests are unaffected; production turns it
+    # off through the environment. Flip it back and redeploy to restore — no code
+    # change, and no data is touched either way.
+    GAMES_ENABLED: bool = True
     # Public base URL of the playable web surface the bot deep-links players to
     # (e.g. /play -> ${GAMES_BASE_URL}/flappy-duck). Override per environment.
     GAMES_BASE_URL: str = "https://games.dsec.club"
@@ -235,15 +302,19 @@ _INSECURE_DEFAULTS = {
 def validate_production_settings(s: "Settings | None" = None) -> None:
     """Refuse to boot in production with insecure defaults or an ephemeral DB.
 
-    Called once at app startup (see app.main.create_app). Only enforced on Vercel
-    (``VERCEL=1``); local/dev/test keep the convenient fallbacks. Without this a
-    missing env var would silently leave the admin key-minting endpoint, gated
-    docs and dashboard behind publicly-known credentials, or persist data to a
-    throwaway serverless SQLite file. Failing loudly beats running open.
+    Called once at app startup (see app.main.create_app). Without this a missing
+    env var would silently leave the admin key-minting endpoint, gated docs and
+    dashboard behind publicly-known credentials, or persist data to a throwaway
+    SQLite file. Failing loudly beats running open.
+
+    Enforced whenever ``APP_ENV=production`` (set by docker compose on the VPS) or
+    the legacy ``VERCEL=1`` is present. It previously keyed off ``VERCEL=1``
+    ALONE, which meant lifting the app onto its own server silently disabled every
+    check below — the guard would have vanished exactly when it started to matter.
     """
-    if os.environ.get("VERCEL") != "1":
-        return
     s = s or settings
+    if s.APP_ENV.lower() != "production" and os.environ.get("VERCEL") != "1":
+        return
     problems: list[str] = []
     if s.AGENT_SECRET == _INSECURE_DEFAULTS["AGENT_SECRET"]:
         problems.append("AGENT_SECRET is still the default")
@@ -255,7 +326,8 @@ def validate_production_settings(s: "Settings | None" = None) -> None:
         raise RuntimeError(
             "Refusing to start: insecure production configuration — "
             + "; ".join(problems)
-            + ". Set the real values as Vercel environment variables."
+            + ". Set the real values in the deployment environment "
+            "(VPS: the .env file read by docker compose)."
         )
 
 

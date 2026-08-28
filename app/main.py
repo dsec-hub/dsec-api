@@ -124,8 +124,14 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
     app.include_router(discord_router, prefix="/discord", tags=["discord"])
     app.include_router(calcom_router, prefix="/calcom", tags=["calcom"])
-    app.include_router(games_router, prefix="/games", tags=["games"])
-    app.include_router(game_link_router, prefix="/game-link", tags=["games"])
+    # Games is behind a master switch (settings.GAMES_ENABLED). When off the
+    # routers are never mounted, so every /games and /game-link path 404s and the
+    # handlers cannot run at all — rather than being mounted and rejecting, which
+    # would leave the DB writes and the rate-limit bookkeeping reachable.
+    # Deliberately not a 503: nothing is temporarily broken, the surface is parked.
+    if settings.GAMES_ENABLED:
+        app.include_router(games_router, prefix="/games", tags=["games"])
+        app.include_router(game_link_router, prefix="/game-link", tags=["games"])
 
     # OAuth 2.1 authorization server (login-based auth for MCP clients whose
     # connector dialog only takes a URL). Mounted at the ROOT — no prefix — so

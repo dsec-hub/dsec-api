@@ -1,0 +1,94 @@
+# Assert that the app refuses to boot on an insecure production configuration.
+#
+# This is deliberately a SEPARATE file from ci.yml rather than a second job in
+# it. ci.yml arrives on main via its own PR; adding a job to it from this branch
+# would collide on rebase. Two files, no conflict, and the check reads as what it
+# is — a property of the VPS migration, not of the test suite.
+#
+# What it covers, and why the test suite cannot: validate_production_settings()
+# only fires when APP_ENV=production (or the legacy VERCEL=1). tests/conftest.py
+# never sets either, so the guard that refuses to start on a placeholder secret
+# or a SQLite URL is never exercised by pytest.
+#
+# That guard keyed off VERCEL=1 ALONE until this branch, which meant lifting the
+# app onto its own server would have silently disabled every check inside it —
+# exactly when it starts to matter, and with no failure to notice. This job is
+# the proof that the fix works, and the tripwire if anyone reverts it.
+
+name: production guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: refuses to boot on placeholder secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile (python:3.13-slim) — the real deploy target.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+
+      # A production environment carrying the insecure defaults must raise.
+      # Checked out of a clean tree, so there is no .env to accidentally supply
+      # real values and mask the failure.
+      - name: APP_ENV=production with a SQLite URL must be rejected
+        env:
+          APP_ENV: production
+          DATABASE_URL: sqlite:///./should-be-rejected.db
+        run: |
+          set +e
+          python -c "
+          from app.config import settings, validate_production_settings
+          validate_production_settings(settings)
+          " 2>err.txt
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+              echo "::error::validate_production_settings() accepted APP_ENV=production with a SQLite DATABASE_URL and default secrets"
+              exit 1
+          fi
+          if ! grep -q "Refusing to start" err.txt; then
+              echo "::error::process failed, but not with the guard's error — check err.txt below"
+              cat err.txt
+              exit 1
+          fi
+          echo "Correctly rejected:"
+          cat err.txt
+
+      # The mirror image: a well-formed production config must NOT raise. Without
+      # this, a guard that rejected everything unconditionally would pass the
+      # test above while making the app unbootable in production.
+      - name: A well-formed production config must be accepted
+        env:
+          APP_ENV: production
+          DATABASE_URL: postgresql://user:pass@example.neon.tech/db
+          AGENT_SECRET: a-real-agent-secret
+          DASHBOARD_PASS: a-real-dashboard-password
+        run: |
+          python -c "
+          from app.config import Settings, validate_production_settings
+          validate_production_settings(Settings())
+          print('accepted a well-formed production configuration')
+          "

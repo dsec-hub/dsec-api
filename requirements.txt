@@ -24,6 +24,9 @@ openpyxl==3.1.5
 Pillow==12.3.0
 pillow-heif==1.5.0
 supabase==2.31.0
+# Cloudflare R2 via its S3-compatible API (STORAGE_BACKEND=r2). Kept alongside
+# supabase so the backend can be switched back without a rebuild.
+boto3==1.43.71
 # PINNED <2.0.0 — mcp 2.0.0 (released 2026-07-28) removed `mcp.server.fastmcp`,
 # which app/features/mcp/server.py imports. An unpinned rebuild resolved to 2.0.0
 # and took the whole API down with ModuleNotFoundError on cold start.

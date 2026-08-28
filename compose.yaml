@@ -1,0 +1,100 @@
+# DSEC API — full VPS stack. One file is the whole deployment, deliberately:
+# committee turns over annually and the next person needs one thing to read.
+#
+#   caddy    TLS termination + reverse proxy (automatic Let's Encrypt certs)
+#   api      the FastAPI app
+#   migrate  runs `alembic upgrade head` once, before api starts
+#   cron     replaces the Vercel cron that closed the monthly games draw
+#
+# Usage on the VPS:
+#   cp .env.production.example .env   # then fill in real values
+#   docker compose up -d --build
+#   docker compose logs -f api
+
+name: dsec-api
+
+services:
+  # One-shot schema migration. `api` waits for this to exit 0, so a bad
+  # migration fails the deploy instead of half-starting the app. This is why
+  # RUN_MIGRATIONS_ON_STARTUP is forced off for the app container below.
+  migrate:
+    build: .
+    env_file: [.env]
+    environment:
+      APP_ENV: production
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+    command: ["python", "scripts/migrate.py"]
+    restart: "no"
+
+  api:
+    build: .
+    env_file: [.env]
+    environment:
+      APP_ENV: production
+      # Migrations are the `migrate` service's job. Leaving this on would race
+      # the migration container and re-run Alembic on every restart.
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    expose: ["8000"]
+    restart: unless-stopped
+    # No published ports: only caddy may reach the app. Binding 8000 to the host
+    # would expose the API unencrypted and bypass the rate limiter's IP handling.
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on: [api]
+    # The Caddyfile substitutes {$API_DOMAIN} and {$ACME_EMAIL}, which are
+    # resolved INSIDE the container — so they have to be passed in explicitly.
+    # Without this Caddy expands them to nothing and dies on startup with
+    # "wrong argument count or unexpected line ending after 'email'", restarting
+    # forever. Deliberately NOT `env_file: [.env]` like the other services: Caddy
+    # has no business holding DATABASE_URL or the dashboard password, and the
+    # blast radius of a compromised TLS terminator should not include them.
+    # `:?` makes compose refuse to start rather than hand Caddy an empty domain.
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates — MUST persist or you will hit
+      - caddy_config:/config  # Let's Encrypt rate limits on redeploy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  # Replaces the `crons` block in vercel.json ("0 1 1 * *" -> close-draw).
+  # busybox crond keeps this in-compose rather than as a host systemd timer, so
+  # the whole deployment stays in one file that moves with the repo.
+  #
+  # The only job here belongs to games. With GAMES_ENABLED=false the route is not
+  # mounted, so the container installs no crontab and idles instead of curling a
+  # 404 once a month and logging a failure someone would eventually investigate.
+  cron:
+    image: alpine:3
+    depends_on: [api]
+    env_file: [.env]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ "$${GAMES_ENABLED:-true}" = "false" ]; then
+          echo "GAMES_ENABLED=false — no cron jobs to schedule; idling."
+          exec tail -f /dev/null
+        fi
+        apk add --no-cache curl >/dev/null 2>&1
+        echo "0 1 1 * * curl -fsS -m 300 -H \"Authorization: Bearer $$CRON_SECRET\" http://api:8000/games/cron/close-draw >> /var/log/cron.log 2>&1" > /etc/crontabs/root
+        crond -f -l 8
+
+volumes:
+  caddy_data:
+  caddy_config:

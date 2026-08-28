@@ -1,0 +1,198 @@
+# Deployment — OVH VPS + Neon
+
+How `dsec-api` runs on its own server. The Vercel setup this replaces is still
+documented in [`deployment.md`](deployment.md); that stays accurate until the DNS
+cutover, and is the rollback target afterwards.
+
+## Why the move
+
+**Not for latency — that is already fixed.** The Vercel deployment used to
+execute in `iad1` (Washington DC) against Neon in `ap-southeast-2` (Sydney), so
+every database round trip crossed the Pacific twice and `/website/events` took
+2.7–2.9 s warm. On 2026-08-14 the project was pinned to
+`serverlessFunctionRegion = syd1` and redeployed:
+
+| | Vercel `iad1` | Vercel `syd1` (now) |
+|---|---|---|
+| `/health` (no DB) | 320–490 ms | **84 ms** median |
+| `/website/events` | **2.7–2.9 s** | **121 ms** median |
+
+That was a configuration bug, not an architecture problem, and it cost one
+setting to fix. Anyone reading an older version of this document was told the
+VPS would deliver a ~20× speedup; it will not, because the speedup already
+happened.
+
+A gateway Discord bot used to be the headline reason. **That plan was dropped on
+2026-08-14**, so it is no longer an argument for anything. The `DISCORD_*`
+variables are unset in every environment and the bot is not deployed.
+
+Be honest about what is left, because it is a shorter list than this document
+once claimed:
+
+- **Cold starts.** Measured after the region pin: a cold `/health` took
+  **4.79 s** against ~90 ms warm — on an endpoint that touches no database. A
+  long-lived process has none. This is now the strongest single argument, and it
+  is a real one for a low-traffic club site that idles most of the day.
+- **Long-running work.** Scrapers and bulk imports fit awkwardly inside a
+  serverless invocation limit and naturally on a box with a worker process.
+- **Flat, predictable cost** instead of per-invocation billing.
+
+Measured side by side after the pin, the VPS is **faster on `/health`
+(66 ms vs 86 ms) and slightly slower on `/website/events` (124 ms vs 112 ms)** —
+both now sit in Sydney against the same pooled Neon endpoint, so database time
+dominates and there is no edge left to win. Anyone expecting a speed improvement
+from the cutover will not measure one.
+
+## Shape
+
+```
+Internet ──▶ Caddy (TLS, :443) ──▶ api (uvicorn, :8000) ──▶ Neon (ap-southeast-2)
+                                    ▲                        Supabase (media)
+                              cron ─┘  monthly games draw
+```
+
+Four containers, one `compose.yaml`:
+
+| Service | Role |
+|---|---|
+| `migrate` | runs `alembic upgrade head` once, **must exit 0 before `api` starts** |
+| `api` | the FastAPI app, one uvicorn worker, no published host port |
+| `caddy` | TLS termination, automatic Let's Encrypt, reverse proxy |
+| `cron` | replaces the `crons` block in `vercel.json` |
+
+`api` deliberately publishes **no host port** — only Caddy can reach it. Binding
+`8000` on the host would serve the API unencrypted and bypass the proxy that
+makes per-IP rate limiting trustworthy (see below).
+
+## Sizing
+
+Measured, not estimated:
+
+| | |
+|---|---|
+| App imported, steady | **136 MB RSS** |
+| Peak during 12 MP image resize | **227 MB** |
+| Running container | **127 MiB** |
+| Everything incl. Caddy, cron and the OS (measured on the VPS) | **789 MB** |
+| OVH VPS-1 provides | **4 GB / 2 vCPU / 40 GB** |
+
+Roughly a quarter of the box. One uvicorn worker is correct: 188 of the ~202
+endpoints are sync `def`, which Starlette runs on a 40-thread pool inside a
+single process, so concurrency comes from threads and DB connections — not from
+worker processes. Add workers only if a measurement shows CPU is the limit; the
+connection pool binds first.
+
+**Do not self-host Postgres on this box.** Neon stays the source of truth:
+`dsec-hub` writes it directly via Drizzle, and a single VPS with hand-rolled
+backups is how a club loses a year of data.
+
+## First deploy
+
+The OVH Ubuntu image ships with an unprivileged **`ubuntu`** user and root SSH
+already disabled, so the bootstrap is piped through `sudo` rather than run as
+root. The `--` matters: without it `sudo` swallows the public-key argument as one
+of its own options.
+
+```bash
+# 1. Harden the fresh box + install Docker (run once)
+ssh ubuntu@<vps-ip> 'sudo bash -s -- "'"$(cat ~/.ssh/id_ed25519.pub)"'"' \
+    < deploy/bootstrap-vps.sh
+
+# 2. Verify key login in a SECOND terminal before closing the first
+ssh dsec@<vps-ip>
+
+# 3. Deploy
+git clone https://github.com/dsec-hub/dsec-api.git && cd dsec-api
+cp .env.production.example .env     # fill in real values, then chmod 600 .env
+docker compose up -d --build
+docker compose logs -f api
+```
+
+The box you provision may be branded `*.vps.ovh.ca` — that is OVH's billing
+subsidiary, not the datacentre. Confirm the location from the IP rather than the
+hostname: `51.161.130.240` geolocates to Sydney and answers a TCP connect in
+21–25 ms from Melbourne, where North America would be 200 ms+.
+
+`bootstrap-vps.sh` creates a `dsec` user, installs your key, disables root and
+password SSH (**only** if a key is present — it will not lock you out), enables
+`ufw` (22/80/443), `fail2ban`, unattended security upgrades, Docker, and 2 GB of
+swap as an OOM cushion.
+
+### Cutover order
+
+Do not touch DNS until the box serves real traffic on its own address.
+
+1. Deploy with `API_DOMAIN` set to a throwaway hostname; confirm `/health`,
+   `/website/events` and one authenticated route.
+2. Lower the `api.dsec.club` TTL to 60 s **at least an hour ahead**.
+3. Set `API_DOMAIN=api.dsec.club` in `.env` and `docker compose up -d` so Caddy
+   serves that vhost, then point the DNS record at the VPS. Caddy issues the
+   certificate on first hit. Doing this the other way round leaves the record
+   pointing at a box that answers with the wrong certificate.
+4. Verify all four front-ends, then keep the Vercel project alive for a week.
+
+Step 4 previously said to update the Discord **Interactions Endpoint URL** in
+the Developer Portal. That no longer applies — the Discord bot was dropped and
+no `DISCORD_*` variable is set in any environment. If Discord is ever revived,
+that step returns, and it must happen *after* the new host is live because
+Discord validates the URL when you save it.
+
+Rollback is one DNS record.
+
+## What changed in the app
+
+Four changes were needed to run safely off Vercel. All are in
+`chore/vps-migration-prep`.
+
+**`validate_production_settings()` keyed off `VERCEL=1`.** That check refuses to
+boot with placeholder secrets or a SQLite database — and it would have silently
+stopped running the moment the app left Vercel, exactly when it started to
+matter. It now triggers on `APP_ENV=production` (set by compose) as well.
+
+**Connection pool 5 + 2 → 15 + 5** (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`). The old
+value was right for serverless, where N ephemeral instances each held a pool and
+the danger was exhausting Neon's limit. In one long-lived process it is instead
+the throughput ceiling, with 40 threads queueing on 5 connections.
+
+**Authenticated traffic is no longer charged to the per-IP bucket.** All four
+front-ends call this API from server-side code and egress from very few
+addresses, so a shared 120 req/min per-IP bucket meant they 429'd each other in a
+way that looked random. Each holds its own key, so the per-key limit is both the
+correct control and a tighter one. The per-key default moved 60 → 300/min; the
+per-IP limit still guards the unauthenticated surface.
+
+**`X-Real-IP` must be set by the proxy.** `app/core/net.py` trusts that header
+because Vercel's edge set it and clients could not override it. A self-hosted
+proxy only recreates that guarantee if it overwrites the header — hence
+`header_up X-Real-IP {remote_host}` in the `Caddyfile`. Without it an attacker
+sends a fresh fake `X-Real-IP` per request, gets a new rate-limit bucket each
+time, and per-IP limiting stops working. **If Cloudflare is ever put in front
+(orange cloud), the connecting peer becomes a Cloudflare edge IP** and every
+visitor collapses into a few buckets; Caddy then needs `trusted_proxies` for
+Cloudflare's ranges and should read `CF-Connecting-IP` instead.
+
+## Backups
+
+```bash
+sudo cp deploy/backup-neon.sh /usr/local/bin/dsec-backup && sudo chmod +x $_
+sudo crontab -e
+#  15 3 * * *  DATABASE_URL='postgresql://...' BACKUP_REMOTE='gdrive:dsec-backups' /usr/local/bin/dsec-backup
+```
+
+Nightly `pg_dump`, gzipped, 14-day retention, aborts rather than rotating if the
+dump looks empty. **Set `BACKUP_REMOTE`** — without it the backup survives loss
+of the database but not loss of the VPS, which is half the point.
+
+## Operations
+
+```bash
+docker compose logs -f api            # tail
+docker compose ps                     # health
+docker compose up -d --build          # deploy a change
+docker compose run --rm migrate       # migrate without restarting the API
+docker compose down                   # stop (keeps cert + config volumes)
+```
+
+Keep the `caddy_data` volume. It holds the TLS certificates; destroying it
+re-issues on every deploy and will hit Let's Encrypt rate limits. To rehearse the
+cutover, uncomment `acme_ca` (staging) in the `Caddyfile` first.
