@@ -238,6 +238,66 @@ def test_sponsor_contacts(client, rw_key):
 
 
 # --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-06: nested mutations are scoped to the parent in their own URL
+# --------------------------------------------------------------------------- #
+
+def test_update_speaker_scoped_to_event_in_url(client, rw_key, db):
+    a = client.post("/events-api", json={"name": "A", "start_date": "2099-01-01"}, headers=_h(rw_key)).json()
+    b = client.post("/events-api", json={"name": "B", "start_date": "2099-02-01"}, headers=_h(rw_key)).json()
+    sp = client.post(f"/events-api/{a['id']}/speakers", json={"name": "Ada"}, headers=_h(rw_key)).json()
+    # Editing the speaker under event B (wrong parent) must 404 and change nothing.
+    r = client.patch(f"/events-api/{b['id']}/speakers/{sp['id']}",
+                     json={"name": "Hacked"}, headers=_h(rw_key))
+    assert r.status_code == 404
+    row = db.get(models.EventSpeaker, sp["id"])
+    assert row.name == "Ada"
+    # A non-existent parent 404s "event not found".
+    r2 = client.patch(f"/events-api/999999/speakers/{sp['id']}",
+                      json={"name": "X"}, headers=_h(rw_key))
+    assert r2.status_code == 404 and "event not found" in r2.text
+    # The correct URL still works.
+    assert client.patch(f"/events-api/{a['id']}/speakers/{sp['id']}",
+                        json={"name": "Ada L."}, headers=_h(rw_key)).json()["name"] == "Ada L."
+
+
+def test_remove_speaker_scoped_to_event_in_url(client, rw_key, db):
+    a = client.post("/events-api", json={"name": "A", "start_date": "2099-01-01"}, headers=_h(rw_key)).json()
+    b = client.post("/events-api", json={"name": "B", "start_date": "2099-02-01"}, headers=_h(rw_key)).json()
+    sp = client.post(f"/events-api/{a['id']}/speakers", json={"name": "Ada"}, headers=_h(rw_key)).json()
+    r = client.delete(f"/events-api/{b['id']}/speakers/{sp['id']}", headers=_h(rw_key))
+    assert r.status_code == 404
+    db.expire_all()
+    assert db.get(models.EventSpeaker, sp["id"]).archived is False  # soft-delete didn't fire
+    # correct URL archives it
+    assert client.delete(f"/events-api/{a['id']}/speakers/{sp['id']}", headers=_h(rw_key)).status_code == 204
+
+
+def test_update_contact_scoped_to_sponsor_in_url(client, rw_key, db):
+    a = client.post("/sponsors", json={"organisation": "A"}, headers=_h(rw_key)).json()
+    b = client.post("/sponsors", json={"organisation": "B"}, headers=_h(rw_key)).json()
+    c = client.post(f"/sponsors/{a['id']}/contacts", json={"name": "Hank"}, headers=_h(rw_key)).json()
+    r = client.patch(f"/sponsors/{b['id']}/contacts/{c['id']}",
+                     json={"email": "x@y.com"}, headers=_h(rw_key))
+    assert r.status_code == 404
+    row = db.get(models.SponsorContact, c["id"])
+    assert row.email is None
+    r2 = client.patch(f"/sponsors/999999/contacts/{c['id']}",
+                      json={"email": "z@y.com"}, headers=_h(rw_key))
+    assert r2.status_code == 404 and "sponsor not found" in r2.text
+
+
+def test_remove_contact_scoped_to_sponsor_in_url(client, rw_key, db):
+    a = client.post("/sponsors", json={"organisation": "A"}, headers=_h(rw_key)).json()
+    b = client.post("/sponsors", json={"organisation": "B"}, headers=_h(rw_key)).json()
+    c = client.post(f"/sponsors/{a['id']}/contacts", json={"name": "Hank"}, headers=_h(rw_key)).json()
+    r = client.delete(f"/sponsors/{b['id']}/contacts/{c['id']}", headers=_h(rw_key))
+    assert r.status_code == 404
+    db.expire_all()
+    assert db.get(models.SponsorContact, c["id"]).archived is False
+    assert client.delete(f"/sponsors/{a['id']}/contacts/{c['id']}", headers=_h(rw_key)).status_code == 204
+
+
+# --------------------------------------------------------------------------- #
 # Self-service key mint
 # --------------------------------------------------------------------------- #
 

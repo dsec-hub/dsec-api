@@ -55,10 +55,14 @@ def add_speaker(db: Session, event_id: int, data: dict) -> EventSpeaker:
     return speaker
 
 
-def update_speaker(db: Session, speaker_id: int, data: dict) -> EventSpeaker | None:
+def update_speaker(
+    db: Session, speaker_id: int, data: dict, *, event_id: int | None = None
+) -> EventSpeaker | None:
     speaker = db.get(EventSpeaker, speaker_id)
     if speaker is None:
         return None
+    if event_id is not None and speaker.event_id != event_id:
+        return None  # the child exists, but not under the parent the caller named
     for key, value in data.items():
         setattr(speaker, key, value)
     db.commit()
@@ -66,11 +70,15 @@ def update_speaker(db: Session, speaker_id: int, data: dict) -> EventSpeaker | N
     return speaker
 
 
-def remove_speaker(db: Session, speaker_id: int) -> EventSpeaker | None:
+def remove_speaker(
+    db: Session, speaker_id: int, *, event_id: int | None = None
+) -> EventSpeaker | None:
     """Soft-archive a speaker (kept out of the public feed, history preserved)."""
     speaker = db.get(EventSpeaker, speaker_id)
     if speaker is None:
         return None
+    if event_id is not None and speaker.event_id != event_id:
+        return None  # the child exists, but not under the parent the caller named
     speaker.archived = True
     db.commit()
     db.refresh(speaker)

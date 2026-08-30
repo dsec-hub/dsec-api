@@ -198,7 +198,10 @@ def update_speaker(
     key: APIKey = Depends(require_api_key("write")),
 ) -> EventSpeakerOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    speaker = relations.update_speaker(db, speaker_id, body.model_dump(exclude_unset=True))
+    _require_event(db, event_id)
+    speaker = relations.update_speaker(
+        db, speaker_id, body.model_dump(exclude_unset=True), event_id=event_id
+    )
     if speaker is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "speaker not found")
     return EventSpeakerOut.model_validate(speaker)
@@ -213,7 +216,8 @@ def remove_speaker(
     key: APIKey = Depends(require_api_key("write")),
 ) -> None:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    if relations.remove_speaker(db, speaker_id) is None:
+    _require_event(db, event_id)
+    if relations.remove_speaker(db, speaker_id, event_id=event_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "speaker not found")
 
 
