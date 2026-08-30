@@ -45,6 +45,35 @@ router = APIRouter()
 _OWNER_RE = re.compile(r"appuser:[0-9]+")
 
 
+def _cascade_revoke(db: Session, root: APIKey) -> None:
+    """Soft-revoke ``root`` and every descendant minted from it via /keys/self.
+
+    BFS over ``parent_key_id`` so a child (or grandchild) key can't outlive the
+    revocation of its parent. Soft-revoke throughout (never hard-delete) to keep
+    the audit trail; a ``seen`` set guards against any accidental cycle. Shared by
+    the basic-auth ``/keys/{id}/revoke`` and the service-key ``/keys/revoke-for-owner``
+    so both revoke paths cascade identically (SEC-07d). Caller commits.
+    """
+    root.revoked = True
+    frontier = [root.id]
+    seen = {root.id}
+    while frontier:
+        # SEC-07d: lock each descendant row as it's discovered (FOR UPDATE; a no-op
+        # on SQLite, a real row lock on Postgres) so a concurrent /keys/self mint of
+        # a child serialises against this revoke instead of slipping a live child in
+        # after we've read the tree. Caller must have locked `root` already.
+        children = db.execute(
+            select(APIKey).where(APIKey.parent_key_id.in_(frontier)).with_for_update()
+        ).scalars().all()
+        frontier = []
+        for child in children:
+            if child.id in seen:
+                continue  # guard against any accidental cycle
+            seen.add(child.id)
+            child.revoked = True
+            frontier.append(child.id)
+
+
 class CreateKeyRequest(BaseModel):
     name: str
     scopes: list[str] = Field(default_factory=lambda: ["read"])
@@ -142,6 +171,25 @@ def self_create_key(
     may request) before calling this; this endpoint is the second gate.
     """
     limiter.check_request(db, key_id=caller.id, ip=client_ip(request))
+    # SEC-07d: re-read the calling key UNDER LOCK and re-check it's still active
+    # before minting. require_api_key() read it earlier without a lock, and the
+    # limiter commit above EXPIRED that ORM object; a concurrent _cascade_revoke of
+    # the parent could commit between then and the insert below, leaving a live
+    # child of a revoked parent.
+    #
+    # Use Session.refresh(..., with_for_update=True), NOT a bare
+    # select(...).with_for_update(): the latter returns the SAME identity-map object
+    # and does not overwrite already-loaded attributes, so a stale `revoked=False`
+    # (reloaded unlocked the moment we touch caller.id) would survive the lock and
+    # the check would wrongly pass. refresh() forces a locked re-SELECT that
+    # repopulates the row, so this mint serialises against the revoke (which locks
+    # the same row) and sees the revocation. FOR UPDATE is a no-op on SQLite.
+    db.refresh(caller, with_for_update=True)
+    if caller.revoked:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="calling key is no longer valid",
+        )
     # SEC-06 deploy-3: the owner label is trusted by the hub's list/revoke UI, so
     # validate its shape (appuser:<id>) rather than accepting any string. Do NOT
     # remove the field — dropping it breaks that UI (api-tokens.ts:98,126).
@@ -220,26 +268,98 @@ def revoke_key(
     db: Session = Depends(get_db),
     _: str = Depends(require_basic_auth),
 ) -> KeyInfo:
-    row = db.get(APIKey, key_id)
+    # Lock the root row (FOR UPDATE) before cascading, so a concurrent mint of a
+    # child serialises against the revoke (SEC-07d race). No-op on SQLite.
+    row = db.execute(
+        select(APIKey).where(APIKey.id == key_id).with_for_update()
+    ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="key not found")
-    row.revoked = True  # soft-revoke; never hard-delete (keep the audit trail)
     # SEC-06 deploy-3: cascade to every descendant minted via /keys/self, so a
-    # child (or grandchild) key can't outlive the revocation of its parent. BFS
-    # over parent_key_id; soft-revoke each, keeping the audit trail.
-    frontier = [row.id]
-    seen = {row.id}
-    while frontier:
-        children = db.execute(
-            select(APIKey).where(APIKey.parent_key_id.in_(frontier))
-        ).scalars().all()
-        frontier = []
-        for child in children:
-            if child.id in seen:
-                continue  # guard against any accidental cycle
-            seen.add(child.id)
-            child.revoked = True
-            frontier.append(child.id)
+    # child (or grandchild) key can't outlive the revocation of its parent.
+    _cascade_revoke(db, row)
+    db.commit()
+    db.refresh(row)
+    return KeyInfo.model_validate(row)
+
+
+class RevokeForOwnerRequest(BaseModel):
+    """A dashboard-user revoking one of their own self-service keys, proxied by
+    dsec-hub. ``owner`` is the same opaque ``appuser:<id>`` label that minting
+    stamped onto ``created_by`` (see SelfKeyRequest)."""
+
+    key_id: int
+    owner: str
+
+
+@router.post("/keys/revoke-for-owner", response_model=KeyInfo)
+def revoke_key_for_owner(
+    req: RevokeForOwnerRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    # SEC-07d: require the `write:keys` scope. It is a per-module scope, so blanket
+    # "write" already satisfies it (has_scope) — the hub's service key holds blanket
+    # write, so NO live-key grant is needed and the revoke path never fails closed
+    # into "can't revoke". What it EXCLUDES is the point: a narrow service key
+    # (write:games, ingest-only) or a read-only admin key does NOT carry write, so a
+    # leaked narrow key can't reach this endpoint. See VALID_SCOPES.
+    caller: APIKey = Depends(require_api_key("write:keys")),
+) -> KeyInfo:
+    """Revoke a dashboard user's own self-service key, cascading to its children.
+
+    dsec-hub used to revoke a user's token by writing ``api_key.revoked`` straight
+    into Neon (api-tokens.ts), which bypassed the parent->child cascade that
+    ``/keys/{id}/revoke`` performs — so revoking a parent key silently left its
+    child keys alive and usable (SEC-07d). Routing the hub's revoke through here
+    makes the cascade run every time.
+
+    Containment (three independent gates, so none alone is load-bearing):
+      1. SCOPE — the caller must hold ``write:keys`` (satisfied by blanket write, so
+         no owner grant, but NOT by narrow read-only/games/ingest keys). This stops a
+         leaked narrow service key from reaching the endpoint at all.
+      2. CALLER — the caller must not be a dashboard user's own self-service key.
+         ``require_api_key`` accepts any key with the scope, and a user MAY mint a
+         blanket-``write`` token (which satisfies gate 1), so without this a user
+         could revoke ANOTHER user's key just by naming their ``appuser:<id>`` label
+         and enumerating ids (round-1 finding). A self-service key is exactly one
+         whose ``created_by`` is an ``appuser:<id>`` label; reject those as callers.
+      3. TARGET — the target's ``created_by`` must equal the passed ``appuser:<id>``
+         owner, which (being an appuser label) also refuses to touch admin/service
+         keys. A missing key and an owner mismatch return the SAME 404.
+
+    We deliberately do NOT tie containment to ``parent_key_id`` lineage. The lineage
+    migration left every pre-existing key ``parent_key_id=NULL``, a user may mint a
+    grandchild, and the service key may be rotated — all of which dsec-hub still
+    lists. A direct-parent check would 404 those and, treated as benign, silently
+    leave live tokens unrevocable (round-2 finding). The cascade still walks
+    parent_key_id downward from the target, so descendants are revoked regardless.
+    """
+    # Bound enumeration: even a legitimate write-capable key can't scan id/owner
+    # pairs unthrottled (the per-key limiter, same as /keys/self).
+    limiter.check_request(db, key_id=caller.id, ip=client_ip(request))
+    if not _OWNER_RE.fullmatch(req.owner or ""):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="owner must match 'appuser:<id>'",
+        )
+    if _OWNER_RE.fullmatch(caller.created_by or ""):
+        # The caller is itself a dashboard user's self-service key — it may never
+        # revoke keys on another user's behalf. (created_by is None/username for the
+        # service and admin keys that legitimately call this.)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="a self-service key cannot revoke keys",
+        )
+    # Lock the target row before the ownership check and the cascade, so a
+    # concurrent mint of a child serialises against this revoke (SEC-07d race).
+    row = db.execute(
+        select(APIKey).where(APIKey.id == req.key_id).with_for_update()
+    ).scalar_one_or_none()
+    if row is None or row.created_by != req.owner:
+        # Identical 404 for missing and wrong-owner: reveal nothing about keys the
+        # named owner doesn't hold.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="key not found")
+    _cascade_revoke(db, row)
     db.commit()
     db.refresh(row)
     return KeyInfo.model_validate(row)

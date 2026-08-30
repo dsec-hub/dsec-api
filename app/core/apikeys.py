@@ -64,6 +64,17 @@ VALID_SCOPES = {
     # SCOPE_ISOLATED_MODULES or switch that route to a plain subset check; today
     # has_scope lets a coarse `read` key satisfy read:membercard (see report).
     "read:membercard",
+    # SEC-07d: gates POST /admin/keys/revoke-for-owner (dsec-hub revoking a user's
+    # own MCP token). It is a per-module scope under has_scope, so blanket "write"
+    # already satisfies it — the hub's service key holds blanket write (it mints
+    # write-scoped user tokens via /keys/self), so no live-key grant is needed. What
+    # it EXCLUDES is the point: narrow service keys (write:games, ingest-only) and
+    # read-only admin keys do NOT carry write, so a leaked narrow key can't reach the
+    # revoke endpoint. Combined with the self-service-caller rejection in that route
+    # (which blocks a user's own blanket-write token), only a write-capable ORG
+    # service key qualifies. An owner who wants tighter least-privilege can later
+    # mint a dedicated key and switch this to an exact, non-wideable scope.
+    "write:keys",
 }
 
 # Modules whose per-module scopes are NOT satisfiable by the legacy coarse

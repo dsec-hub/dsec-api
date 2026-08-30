@@ -368,6 +368,190 @@ def test_self_mint_legacy_caller_cannot_escalate_into_isolated_modules(client, d
     assert r.status_code == 403
 
 
+# SEC-07d: dsec-hub used to revoke a user's own key with a direct Neon write, which
+# bypassed the parent->child cascade. It now calls POST /admin/keys/revoke-for-owner,
+# authenticated by its service key and scoped to the caller-supplied owner label.
+def _svc_key(db, name="hub-svc", scopes=("read", "write")):
+    """A service key (raw + row), the parent of everything it mints via /keys/self."""
+    gen = generate_key()
+    row = models.APIKey(name=name, prefix=gen.prefix, key_hash=gen.key_hash, scopes=list(scopes))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return gen.raw_key, row
+
+
+def _owned_key(db, owner, name="owned", parent_id=None):
+    """A dashboard-user self-service key (created_by = appuser:<id>). Returns the row."""
+    gen = generate_key()
+    row = models.APIKey(
+        name=name, prefix=gen.prefix, key_hash=gen.key_hash, scopes=["read"],
+        created_by=owner, parent_key_id=parent_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def test_revoke_for_owner_cascades_to_children(client, db):
+    svc_raw, svc = _svc_key(db)
+    # user keys are minted BY the service key, so parent_key_id == svc.id
+    parent = _owned_key(db, "appuser:42", "parent", parent_id=svc.id)
+    child = _owned_key(db, "appuser:42", "child", parent_id=parent.id)
+    grandchild = _owned_key(db, "appuser:42", "grandchild", parent_id=child.id)
+
+    r = client.post(
+        "/admin/keys/revoke-for-owner",
+        json={"key_id": parent.id, "owner": "appuser:42"},
+        headers=_h(svc_raw),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["revoked"] is True
+    for k in (parent, child, grandchild):
+        db.refresh(k)
+        assert k.revoked is True  # cascade reached every descendant
+
+
+def test_revoke_for_owner_rejects_self_service_caller(client, db):
+    """SEC-07d finding-1 regression: require_api_key() accepts ANY valid key, so a
+    dashboard user must not be able to revoke ANOTHER user's key using their own
+    self-service key as the bearer — even when they pass the victim's REAL owner
+    label. A self-service caller (created_by = appuser:<id>) is rejected 403 and the
+    victim key survives."""
+    svc_raw, svc = _svc_key(db)
+    victim = _owned_key(db, "appuser:99", "victim", parent_id=svc.id)
+    # the attacker's own self-service key (created_by is an appuser label)
+    attacker_gen = generate_key()
+    db.add(models.APIKey(
+        name="attacker", prefix=attacker_gen.prefix, key_hash=attacker_gen.key_hash,
+        scopes=["read", "write"], created_by="appuser:42", parent_key_id=svc.id,
+    ))
+    db.commit()
+
+    r = client.post(
+        "/admin/keys/revoke-for-owner",
+        json={"key_id": victim.id, "owner": "appuser:99"},  # victim's ACTUAL owner
+        headers=_h(attacker_gen.raw_key),
+    )
+    assert r.status_code == 403, r.text
+    db.refresh(victim)
+    assert victim.revoked is False
+
+
+def test_revoke_for_owner_rejects_narrow_service_key(client, db):
+    """SEC-07d round-3 regression: a leaked NARROW service key (no blanket write —
+    e.g. the public dsec-games key, created_by is non-appuser so it passes the caller
+    gate) must NOT revoke user tokens. The write:keys scope gate rejects it (403)."""
+    svc_raw, svc = _svc_key(db)
+    victim = _owned_key(db, "appuser:7", "victim", parent_id=svc.id)
+    narrow = _make_key(db, ["read:games", "write:games"], "games")  # non-appuser, no blanket write
+
+    r = client.post(
+        "/admin/keys/revoke-for-owner",
+        json={"key_id": victim.id, "owner": "appuser:7"},
+        headers=_h(narrow),
+    )
+    assert r.status_code == 403, r.text
+    db.refresh(victim)
+    assert victim.revoked is False
+
+
+def test_revoke_for_owner_scopes_to_owner_and_revokes_pre_lineage(client, db):
+    """The service key can only revoke keys whose created_by matches the passed
+    owner: an admin-minted key (username owner) and a missing id both 404. But a
+    PRE-LINEAGE user key (parent_key_id NULL, as the migration left every existing
+    row) with a matching owner IS revocable — a direct-parent check would have
+    wrongly 404'd it (round-2 finding)."""
+    svc_raw, svc = _svc_key(db)
+    admin_key = _owned_key(db, "cleo", "admin-minted", parent_id=svc.id)  # wrong owner label
+    for kid in (admin_key.id, 999999):
+        r = client.post(
+            "/admin/keys/revoke-for-owner",
+            json={"key_id": kid, "owner": "appuser:42"},
+            headers=_h(svc_raw),
+        )
+        assert r.status_code == 404, (kid, r.text)
+    db.refresh(admin_key)
+    assert admin_key.revoked is False
+
+    pre_lineage = _owned_key(db, "appuser:42", "legacy", parent_id=None)  # NULL parent
+    r = client.post(
+        "/admin/keys/revoke-for-owner",
+        json={"key_id": pre_lineage.id, "owner": "appuser:42"},
+        headers=_h(svc_raw),
+    )
+    assert r.status_code == 200, r.text
+    db.refresh(pre_lineage)
+    assert pre_lineage.revoked is True
+
+
+def test_revoke_for_owner_validates_owner_label_and_auth(client, db):
+    svc_raw, svc = _svc_key(db)
+    k = _owned_key(db, "appuser:1", "k", parent_id=svc.id)
+    # malformed owner label -> 400 (before any lookup)
+    assert client.post(
+        "/admin/keys/revoke-for-owner",
+        json={"key_id": k.id, "owner": "appuser:1\n"},
+        headers=_h(svc_raw),
+    ).status_code == 400
+    # unauthenticated -> 401
+    assert client.post(
+        "/admin/keys/revoke-for-owner",
+        json={"key_id": k.id, "owner": "appuser:1"},
+    ).status_code == 401
+    db.refresh(k)
+    assert k.revoked is False
+
+
+def test_self_mint_rejected_when_caller_key_revoked(client, db):
+    """SEC-07d mint-race guard (auth-level slice): a revoked service key cannot mint.
+    verify_key already rejects revoked keys at auth; the db.refresh(with_for_update)
+    re-check covers the narrower window where the parent is revoked mid-request (see
+    test_locked_refresh_sees_out_of_band_revocation for the mechanism)."""
+    svc_raw, svc = _svc_key(db)
+    svc.revoked = True
+    db.commit()
+    r = client.post(
+        "/admin/keys/self",
+        json={"name": "x", "scopes": ["read"], "owner": "appuser:1"},
+        headers=_h(svc_raw),
+    )
+    assert r.status_code == 401
+
+
+def test_locked_refresh_sees_out_of_band_revocation(db):
+    """SEC-07d mint-race mechanism: after the limiter's commit expires the caller ORM
+    object, a bare select(...).with_for_update() would return the stale identity-map
+    row (revoked=False). Session.refresh(..., with_for_update=True) must repopulate it
+    so a revocation committed by another session is seen. This guards the mint-race
+    fix against silently regressing to the stale-read behaviour."""
+    from sqlalchemy import update as sa_update
+
+    from app.db import SessionLocal
+
+    gen = generate_key()
+    row = models.APIKey(name="svc", prefix=gen.prefix, key_hash=gen.key_hash, scopes=["read"])
+    db.add(row)
+    db.commit()
+    key_id = row.id
+
+    caller = db.get(models.APIKey, key_id)
+    assert caller.revoked is False
+    db.commit()          # mimic the limiter commit: expires `caller`
+    _ = caller.id        # touching an attr reloads the object UNLOCKED (revoked=False)
+
+    other = SessionLocal()
+    try:
+        other.execute(sa_update(models.APIKey).where(models.APIKey.id == key_id).values(revoked=True))
+        other.commit()
+    finally:
+        other.close()
+
+    db.refresh(caller, with_for_update=True)  # the fix: locked re-SELECT repopulates
+    assert caller.revoked is True
+
+
 # --------------------------------------------------------------------------- #
 # MCP tools (direct calls with the auth contextvar set)
 # --------------------------------------------------------------------------- #
