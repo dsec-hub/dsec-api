@@ -231,6 +231,19 @@ def test_self_mint_rejects_bad_owner_label(client, db):
     assert ok.status_code == 200
 
 
+def test_self_mint_owner_label_rejects_regex_bypasses(client, db):
+    """EXACT appuser:<ascii-digits> only. A trailing newline (Python `$` matches
+    before it) and Unicode digits (which `\\d` accepts) must be rejected — either
+    would pass a naive regex yet fail the hub's exact created_by lookup, leaving
+    the minted key invisible and unrevocable."""
+    svc = _make_key(db, ["read", "write"])
+    for bad in ("appuser:12\n", "appuser:١٢", "appuser:12x", "xappuser:12", "appuser:"):
+        r = client.post("/admin/keys/self",
+                        json={"name": "k", "scopes": ["read"], "owner": bad},
+                        headers=_h(svc))
+        assert r.status_code == 400, f"expected 400 for owner={bad!r}, got {r.status_code}"
+
+
 def test_self_mint_enforces_outstanding_child_cap(client, db, monkeypatch):
     monkeypatch.setattr(settings, "SELF_KEY_MAX_OUTSTANDING", 1)
     svc = _make_key(db, ["read", "write"])

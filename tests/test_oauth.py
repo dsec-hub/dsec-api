@@ -484,6 +484,49 @@ def test_refresh_denied_for_deactivated_user(client, db, user):
     assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
 
 
+def test_refresh_denied_for_deleted_user(client, db, user):
+    """A deleted account is treated exactly like an inactive one — the refresh
+    chain is killed, not silently rotated forward forever."""
+    cid, tok = _issue(client, user)
+    db.delete(user)
+    db.commit()
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+
+
+def test_refresh_fails_closed_on_lookup_error_without_rotating(client, user, monkeypatch):
+    """On a transient app_user lookup failure the refresh is denied AND the
+    presented refresh token is NOT spent — so an inactive account can't slip a
+    fresh window through a blip, and a genuine client just retries."""
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.orm import Session
+
+    from app.models import AppUser as _AppUser
+
+    cid, tok = _issue(client, user)
+    real_get = Session.get
+
+    def boom(self, entity, ident, *args, **kwargs):
+        if entity is _AppUser:
+            raise SQLAlchemyError("simulated lookup failure")
+        return real_get(self, entity, ident, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "get", boom)
+    bad = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert bad.status_code == 400 and bad.json()["error"] == "invalid_grant"
+
+    # The refresh token was NOT rotated: with the DB healthy again it still works.
+    monkeypatch.undo()
+    good = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert good.status_code == 200, good.text
+
+
 # --------------------------------------------------------------------------- #
 # SEC-07(b): refresh re-derives scopes from the live role (narrow-only)
 # --------------------------------------------------------------------------- #
@@ -576,6 +619,17 @@ def test_revoked_client_rejected_at_authorize_and_token(client, user):
         "grant_type": "authorization_code", "code": code, "client_id": cid, "code_verifier": verifier,
     })
     assert t.status_code == 401 and t.json()["error"] == "invalid_client"
+
+
+def test_revoking_client_kills_existing_access_tokens(client, db, user):
+    """Revoking a client immediately invalidates tokens already issued for it —
+    they must not keep hitting MCP until their ~1h expiry."""
+    cid, tok = _issue(client, user)
+    assert service.verify_access_token(tok["access_token"], db) is not None
+    r = client.post(f"/admin/oauth/clients/{cid}/revoke", auth=_ADMIN_BASIC)
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    db.rollback()  # end this session's read snapshot so it sees the committed revoke
+    assert service.verify_access_token(tok["access_token"], db) is None
 
 
 def test_admin_role_can_grant_ingest(client, db):

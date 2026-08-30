@@ -420,19 +420,22 @@ async def token(request: Request, db: Session = Depends(get_db)):
         try:
             user = db.get(AppUser, old.user_id)
         except SQLAlchemyError:
+            # FAIL CLOSED: on a transient lookup failure, DO NOT rotate. Retaining
+            # the frozen grant and issuing a fresh 60-day window could let an
+            # inactive account slip a new refresh chain through a blip — the exact
+            # "last year's committee still holding a credential" threat. The
+            # presented refresh token is untouched, so a genuine client simply
+            # retries once the DB recovers.
             db.rollback()
-            user = None
-        if user is not None and not user.is_active:
-            # Deactivated account → kill the whole refresh chain, don't re-issue.
+            return _token_error("invalid_grant", 400, "could not verify the account")
+        if user is None or not user.is_active:
+            # Deleted OR deactivated → kill the whole refresh chain, don't re-issue.
+            # A missing app_user row is treated exactly like an inactive one so a
+            # deleted account's refresh chain cannot live on forever.
             service.revoke_family(db, client_id=old.client_id, user_id=old.user_id)
             return _token_error("invalid_grant", 400, "account is inactive")
-        if user is not None:
-            rederived = set(service.scopes_for_grant(db, user, _coarse_grant(original)))
-            scope_tokens = [s for s in original if s in rederived]  # narrow only
-        else:
-            # Can't read the role (degraded DB) → keep the frozen grant; the access
-            # token is still re-checked against app_user on every use (SEC-07a).
-            scope_tokens = list(original)
+        rederived = set(service.scopes_for_grant(db, user, _coarse_grant(original)))
+        scope_tokens = [s for s in original if s in rederived]  # narrow only
         req_scope = str(form.get("scope") or "").split()
         if req_scope:  # a client may narrow further, never widen
             narrowed = [s for s in scope_tokens if s in req_scope]

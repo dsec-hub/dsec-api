@@ -241,12 +241,10 @@ class NeonRateLimiter:
         )
         row = db.execute(select(RateLimit).where(*where)).scalar_one_or_none()
         if row is None:
-            # Belt-and-braces: two first-of-day triggers can race to insert, and
-            # in the (non-atomic) window around the OPS-05 constraint deploy an
-            # insert could still collide with the midnight 'req' row under the old
-            # (key_id, window_start) key. Catch IntegrityError, roll back, and
-            # re-SELECT so we converge on the existing row instead of surfacing a
-            # 500 that would pin every trigger route for that key for the UTC day.
+            # First trigger of the day for this key. Two callers can race to
+            # insert; the loser catches IntegrityError, rolls back, and re-SELECTs
+            # the winner's trigger row to converge on it — never a 500 that would
+            # pin every trigger route for that key for the whole UTC day.
             row = RateLimit(
                 key_id=key_id, bucket="trigger", window_start=day, trigger_count_today=0
             )
@@ -257,13 +255,22 @@ class NeonRateLimiter:
                 db.rollback()
                 row = db.execute(select(RateLimit).where(*where)).scalar_one_or_none()
                 if row is None:
-                    # A concurrent prune deleted it between the flush and this
-                    # re-select; treat this call as the first trigger of the day.
-                    row = RateLimit(
-                        key_id=key_id, bucket="trigger", window_start=day,
-                        trigger_count_today=0,
+                    # The insert conflicted yet NO trigger row exists to fall back
+                    # on: the collision was with a DIFFERENT bucket (the midnight
+                    # 'req' row) under the pre-widening (key_id, window_start) key —
+                    # the brief non-atomic window while the OPS-05 constraint change
+                    # and this deploy land separately. Re-inserting the identical
+                    # trigger row would raise the SAME IntegrityError (a 500, or a
+                    # loop), so degrade to a controlled, retryable 503 instead; once
+                    # the widened constraint is live the retry inserts cleanly. (A
+                    # concurrent prune deleting the winner in the microseconds
+                    # between flush and re-select also lands here — a retry is the
+                    # right response there too.)
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="rate limiter temporarily unavailable; retry shortly",
+                        headers={"Retry-After": "2"},
                     )
-                    db.add(row)
         if row.trigger_count_today >= settings.RATE_LIMIT_TRIGGER_PER_DAY:
             db.commit()
             raise HTTPException(

@@ -450,3 +450,23 @@ def revoke_family(db: Session, *, client_id: str, user_id: int) -> None:
         changed = True
     if changed:
         db.commit()
+
+
+def revoke_client_tokens(db: Session, *, client_id: str) -> int:
+    """Revoke every active token issued for a client (across ALL users), returning
+    the count. Does NOT commit — the caller commits it in the same transaction as
+    the client-revoke so the two land atomically.
+
+    verify_access_token checks only the token's own state (not the client's), so
+    revoking OAuthClient.revoked alone would leave already-issued access tokens
+    working until their ~1h expiry. Killing the tokens here makes client
+    revocation take effect immediately (NEW-APIROUTERS-04)."""
+    rows = db.execute(
+        select(OAuthToken).where(
+            OAuthToken.client_id == client_id,
+            OAuthToken.revoked == False,  # noqa: E712 — SQL boolean, not Python
+        )
+    ).scalars().all()
+    for r in rows:
+        r.revoked = True
+    return len(rows)

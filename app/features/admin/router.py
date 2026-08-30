@@ -29,6 +29,7 @@ from app.core.logging import log_event
 from app.core.net import client_ip
 from app.features.archive.service import build_export_bundle
 from app.features.mcp.auth import has_scope
+from app.features.oauth import service as oauth_service
 from app.core.ratelimit import limiter
 from app.db import get_db
 from app.models import APIKey, OAuthClient, RateLimit
@@ -36,9 +37,12 @@ from app.models import APIKey, OAuthClient, RateLimit
 router = APIRouter()
 
 # SEC-06 deploy-3: dsec-app scopes a user's own keys with an "appuser:<id>" owner
-# label, and the hub's list/revoke UI keys off it. Validate the shape instead of
-# trusting or removing it — an owner that isn't appuser:<digits> is rejected.
-_OWNER_RE = re.compile(r"^appuser:\d+$")
+# label, and the hub's list/revoke UI keys off an EXACT `created_by == "appuser:N"`
+# match. Validate the shape instead of trusting or removing it. Use fullmatch with
+# an ASCII-only [0-9]: `^...$` + `\d` would accept "appuser:12\n" (Python `$`
+# matches before a trailing newline) and Unicode digits like "appuser:١٢", both of
+# which then fail the hub's exact lookup and leave the key invisible/unrevocable.
+_OWNER_RE = re.compile(r"appuser:[0-9]+")
 
 
 class CreateKeyRequest(BaseModel):
@@ -141,7 +145,7 @@ def self_create_key(
     # SEC-06 deploy-3: the owner label is trusted by the hub's list/revoke UI, so
     # validate its shape (appuser:<id>) rather than accepting any string. Do NOT
     # remove the field — dropping it breaks that UI (api-tokens.ts:98,126).
-    if not _OWNER_RE.match(req.owner or ""):
+    if not _OWNER_RE.fullmatch(req.owner or ""):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="owner must match 'appuser:<id>'",
@@ -284,6 +288,10 @@ def revoke_oauth_client(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
     row.revoked = True
+    # Kill every access/refresh token already issued for this client IN THE SAME
+    # transaction, so revocation is immediate rather than lingering until each
+    # token's ~1h expiry (NEW-APIROUTERS-04).
+    oauth_service.revoke_client_tokens(db, client_id=client_id)
     db.commit()
     db.refresh(row)
     return OAuthClientInfo.model_validate(row)

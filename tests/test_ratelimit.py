@@ -125,6 +125,54 @@ def test_check_and_count_trigger_survives_midnight_req_row(db):
     assert row.trigger_count_today == 1
 
 
+def test_trigger_insert_degrades_to_503_under_old_constraint():
+    """OPS-05 recovery correctness against the PRE-widening unique key. Build a
+    rate_limit table with the OLD (key_id, window_start) constraint, seed the
+    midnight 'req' row, and drive check_and_count_trigger: its insert collides on
+    a DIFFERENT bucket, the re-SELECT finds no trigger row, and recovery must
+    degrade to a controlled 503 rather than re-inserting the same conflicting row
+    (which would 500 / loop)."""
+    from sqlalchemy import (
+        Column,
+        DateTime,
+        Integer,
+        MetaData,
+        String,
+        Table,
+        UniqueConstraint,
+        create_engine,
+    )
+    from sqlalchemy.orm import Session
+    from sqlalchemy.pool import StaticPool
+
+    from app.core import ratelimit as rl
+
+    eng = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    md = MetaData()
+    Table(
+        "rate_limit", md,
+        Column("id", Integer, primary_key=True),
+        Column("key_id", Integer),
+        Column("bucket", String(128)),
+        Column("window_start", DateTime(timezone=True)),
+        Column("count", Integer, default=0),
+        Column("trigger_count_today", Integer, default=0),
+        # The OLD unique key — excludes `bucket`.
+        UniqueConstraint("key_id", "window_start", name="uq_ratelimit_key_window"),
+    )
+    md.create_all(eng)
+
+    with Session(eng) as s:
+        day = rl._day_window(datetime.now(timezone.utc))
+        s.add(rl.RateLimit(key_id=5, bucket="req", window_start=day, count=1))
+        s.commit()
+        with pytest.raises(HTTPException) as exc:
+            rl.limiter.check_and_count_trigger(s, key_id=5)
+        assert exc.value.status_code == 503
+
+
 def test_prune_rate_limit_cron_deletes_stale_rows(client, db, monkeypatch):
     """OPS-05: the nightly cron route deletes rows older than two days and keeps
     recent ones. With a blank CRON_SECRET (dev), the route is reachable."""

@@ -40,24 +40,28 @@ def _indexes(table: str) -> set[str]:
     return {i["name"] for i in insp.get_indexes(table)}
 
 
+def _fk_names(table: str) -> set[str]:
+    insp = sa.inspect(op.get_bind())
+    return {fk.get("name") for fk in insp.get_foreign_keys(table)}
+
+
 def upgrade() -> None:
     if "parent_key_id" not in _columns("api_key"):
         op.add_column("api_key", sa.Column("parent_key_id", sa.Integer(), nullable=True))
     if _INDEX not in _indexes("api_key"):
         op.create_index(_INDEX, "api_key", ["parent_key_id"])
-    # Self-referential FK. Named so the downgrade can drop it; wrapped because a
-    # re-run (idempotency) would otherwise fail on the duplicate constraint.
-    try:
+    # Self-referential FK, created only when the exact named constraint is absent.
+    # Inspecting for the name (rather than catching every exception) keeps this
+    # genuinely idempotent AND lets a real DDL error surface on a live-Neon run
+    # instead of being swallowed — a blanket except would hide it and, since a
+    # failed DDL aborts the transaction anyway, wouldn't actually make it re-runnable.
+    if _FK not in _fk_names("api_key"):
         op.create_foreign_key(_FK, "api_key", "api_key", ["parent_key_id"], ["id"])
-    except Exception:  # noqa: BLE001 — already present on a re-run
-        pass
 
 
 def downgrade() -> None:
-    try:
+    if _FK in _fk_names("api_key"):
         op.drop_constraint(_FK, "api_key", type_="foreignkey")
-    except Exception:  # noqa: BLE001 — may not exist
-        pass
     if _INDEX in _indexes("api_key"):
         op.drop_index(_INDEX, table_name="api_key")
     if "parent_key_id" in _columns("api_key"):
