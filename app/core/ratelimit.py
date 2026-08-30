@@ -234,18 +234,36 @@ class NeonRateLimiter:
             )
 
         # Per-key daily trigger counter.
-        row = db.execute(
-            select(RateLimit).where(
-                RateLimit.key_id == key_id,
-                RateLimit.bucket == "trigger",
-                RateLimit.window_start == day,
-            )
-        ).scalar_one_or_none()
+        where = (
+            RateLimit.key_id == key_id,
+            RateLimit.bucket == "trigger",
+            RateLimit.window_start == day,
+        )
+        row = db.execute(select(RateLimit).where(*where)).scalar_one_or_none()
         if row is None:
+            # Belt-and-braces: two first-of-day triggers can race to insert, and
+            # in the (non-atomic) window around the OPS-05 constraint deploy an
+            # insert could still collide with the midnight 'req' row under the old
+            # (key_id, window_start) key. Catch IntegrityError, roll back, and
+            # re-SELECT so we converge on the existing row instead of surfacing a
+            # 500 that would pin every trigger route for that key for the UTC day.
             row = RateLimit(
                 key_id=key_id, bucket="trigger", window_start=day, trigger_count_today=0
             )
             db.add(row)
+            try:
+                db.flush()
+            except IntegrityError:
+                db.rollback()
+                row = db.execute(select(RateLimit).where(*where)).scalar_one_or_none()
+                if row is None:
+                    # A concurrent prune deleted it between the flush and this
+                    # re-select; treat this call as the first trigger of the day.
+                    row = RateLimit(
+                        key_id=key_id, bucket="trigger", window_start=day,
+                        trigger_count_today=0,
+                    )
+                    db.add(row)
         if row.trigger_count_today >= settings.RATE_LIMIT_TRIGGER_PER_DAY:
             db.commit()
             raise HTTPException(

@@ -9,14 +9,14 @@ also mounted under /admin.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.auth import require_basic_auth
+from app.auth import require_basic_auth, require_cron_secret
 from app.core.apikeys import (
     VALID_SCOPES,
     default_key_expiry,
@@ -29,7 +29,7 @@ from app.features.archive.service import build_export_bundle
 from app.features.mcp.auth import has_scope
 from app.core.ratelimit import limiter
 from app.db import get_db
-from app.models import APIKey
+from app.models import APIKey, RateLimit
 
 router = APIRouter()
 
@@ -186,6 +186,31 @@ def revoke_key(
     db.commit()
     db.refresh(row)
     return KeyInfo.model_validate(row)
+
+
+@router.get("/cron/prune-rate-limit")
+def cron_prune_rate_limit(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_cron_secret),
+) -> dict:
+    """Nightly (Vercel Cron): delete rate_limit rows older than two days (OPS-05).
+
+    The table grows one permanent row per (IP, minute) for every unauthenticated
+    request across the 17 public /website routes and was never pruned. Two days
+    is comfortably older than any live window: minute buckets are seconds wide and
+    the per-day 'trigger'/global rows key off the START of the current UTC day, so
+    a 48-hour cutoff never touches a counter still in use.
+
+    Authorised by CRON_SECRET (Authorization: Bearer <secret>), exactly like the
+    games draw cron — not a new scheduling mechanism. The one-time manual prune of
+    the historical backlog is a separate OWNER step, done by hand against Neon.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=2)
+    deleted = db.execute(
+        delete(RateLimit).where(RateLimit.window_start < cutoff)
+    ).rowcount
+    db.commit()
+    return {"deleted": int(deleted or 0), "cutoff": cutoff.isoformat()}
 
 
 @router.get("/archive/export")

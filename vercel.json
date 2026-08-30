@@ -19,6 +19,10 @@
     {
       "path": "/games/cron/close-draw",
       "schedule": "0 1 1 * *"
+    },
+    {
+      "path": "/admin/cron/prune-rate-limit",
+      "schedule": "0 3 * * *"
     }
   ]
 }

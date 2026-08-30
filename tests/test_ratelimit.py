@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import select
 
 from app.core.ratelimit import _minute_window, limiter
 from app.models import RateLimit
@@ -97,3 +99,48 @@ def test_trigger_and_request_counters_coexist_in_the_same_window(db):
     # Same key, same window, different bucket — must be allowed.
     db.add(RateLimit(key_id=1, bucket="req", window_start=midnight, count=1))
     db.commit()  # <-- IntegrityError on the pre-fix constraint
+
+
+def test_check_and_count_trigger_survives_midnight_req_row(db):
+    """OPS-05 end-to-end: a per-minute 'req' row already sits at today's midnight
+    for a key; check_and_count_trigger must still create that key's daily trigger
+    counter for the SAME window (bucket-aware unique key) instead of 500-ing."""
+    from sqlalchemy import select
+
+    from app.core import ratelimit as rl
+
+    day = rl._day_window(datetime.now(timezone.utc))
+    db.add(RateLimit(key_id=7, bucket="req", window_start=day, count=1))
+    db.commit()
+
+    rl.limiter.check_and_count_trigger(db, key_id=7)  # must not raise
+
+    row = db.execute(
+        select(RateLimit).where(
+            RateLimit.key_id == 7,
+            RateLimit.bucket == "trigger",
+            RateLimit.window_start == day,
+        )
+    ).scalar_one()
+    assert row.trigger_count_today == 1
+
+
+def test_prune_rate_limit_cron_deletes_stale_rows(client, db, monkeypatch):
+    """OPS-05: the nightly cron route deletes rows older than two days and keeps
+    recent ones. With a blank CRON_SECRET (dev), the route is reachable."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "CRON_SECRET", "")
+    monkeypatch.setattr(app_settings, "APP_ENV", "development")
+    now = datetime.now(timezone.utc)
+    db.add(RateLimit(key_id=None, bucket="ip:old", window_start=now - timedelta(days=3), count=1))
+    db.add(RateLimit(key_id=None, bucket="ip:new", window_start=now - timedelta(hours=1), count=1))
+    db.commit()
+
+    r = client.get("/admin/cron/prune-rate-limit")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 1
+
+    db.expire_all()
+    remaining = {row.bucket for row in db.execute(select(RateLimit)).scalars()}
+    assert remaining == {"ip:new"}
