@@ -72,7 +72,16 @@ def get_project(db: Session, project_id: int) -> Project | None:
 def create_project(db: Session, data: dict) -> Project:
     data = dict(data)
     co_owner_ids = data.pop("co_owner_ids", None)
-    if not data.get("slug"):
+    raw = (data.get("slug") or "").strip()
+    if raw:
+        # An explicitly-supplied slug is slugified and collision-checked here so a
+        # duplicate is a clean ValueError (-> 422) rather than a DB IntegrityError
+        # -> 500 from the unique index.
+        slug = _slugify(raw)
+        if db.execute(select(Project.id).where(Project.slug == slug)).first() is not None:
+            raise ValueError(f"slug '{slug}' is already in use")
+        data["slug"] = slug
+    else:
         data["slug"] = _unique_slug(db, _slugify(data.get("name", "")))
     proj = Project(**data)
     db.add(proj)
@@ -89,6 +98,20 @@ def update_project(db: Session, project_id: int, data: dict) -> Project | None:
         return None
     data = dict(data)
     co_owner_ids = data.pop("co_owner_ids", None)
+    if "slug" in data:
+        # Only normalise a genuinely NEW slug: echoing the current slug back (a
+        # changed slug is a broken public URL) is a no-op, and a blank explicit
+        # slug is ignored rather than nulling the column.
+        raw = (data.get("slug") or "").strip()
+        slug = _slugify(raw) if raw else None
+        if slug and slug != proj.slug:
+            if db.execute(
+                select(Project.id).where(Project.slug == slug, Project.id != project_id)
+            ).first() is not None:
+                raise ValueError(f"slug '{slug}' is already in use")
+            data["slug"] = slug
+        else:
+            data.pop("slug")  # unchanged or blank → leave the stored slug alone
     for key, value in data.items():
         setattr(proj, key, value)
     db.commit()

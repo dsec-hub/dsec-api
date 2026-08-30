@@ -7,16 +7,12 @@ app/models.py::ScanTarget and the shared contract.
 
 from __future__ import annotations
 
-import re
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
-# A QR card encodes an absolute destination — http(s)/mailto/tel only (no
-# relative /paths: a phone camera can't resolve them). javascript:/data:/etc are
-# rejected to avoid XSS via the public page.
-_URL_SCHEME_RE = re.compile(r"^(https?|mailto|tel):", re.IGNORECASE)
+from app.core.urls import validate_public_url
 
 # The 4 light scan accents (ink-on-colour headers). NULL ⇒ auto-cycle by position.
 SCAN_ACCENTS = {"blue", "pink", "yellow", "mint"}
@@ -36,18 +32,9 @@ class ScanTargetBase(BaseModel):
     @field_validator("url")
     @classmethod
     def _validate_url(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        v = v.strip()
-        if len(v) > 2048:
-            raise PydanticCustomError("value_error", "url must be at most 2048 characters")
-        if not _URL_SCHEME_RE.match(v):
-            raise PydanticCustomError(
-                "value_error",
-                "url must be an absolute http(s), mailto or tel URL (a QR code "
-                "can't encode a relative path)",
-            )
-        return v
+        # A QR card encodes an absolute destination (no relative /paths: a phone
+        # camera can't resolve them). javascript:/data:/etc are rejected (XSS).
+        return validate_public_url(v, max_length=2048, allow_relative=False)
 
     @field_validator("accent")
     @classmethod

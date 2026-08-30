@@ -13,9 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
-# Allowed absolute-URL schemes for a link destination. Anything else (e.g.
-# javascript:, data:, vbscript:) is rejected to avoid XSS via the public page.
-_URL_SCHEME_RE = re.compile(r"^(https?|mailto|tel):", re.IGNORECASE)
+from app.core.urls import validate_public_url
 
 # Socials are external profile URLs, so they must be absolute http(s) (no
 # relative paths, no other schemes). `email` is handled separately.
@@ -69,23 +67,9 @@ class LinkBase(BaseModel):
     @field_validator("url")
     @classmethod
     def _validate_url(cls, v: str | None) -> str | None:
-        # None passes (PATCH may omit url); otherwise enforce a safe destination.
-        if v is None:
-            return v
-        v = v.strip()
-        # PydanticCustomError (not a bare ValueError) keeps the error context
-        # JSON-serialisable for the app's RequestValidationError handler, which
-        # dumps exc.errors() directly. Both surface as a clean 422.
-        if len(v) > 2048:
-            raise PydanticCustomError("value_error", "url must be at most 2048 characters")
-        # Either a relative in-app path ("/events") or an allowed-scheme URL.
-        if not (v.startswith("/") or _URL_SCHEME_RE.match(v)):
-            raise PydanticCustomError(
-                "value_error",
-                "url must be a relative path (starting with '/') or use an "
-                "http(s), mailto or tel scheme",
-            )
-        return v
+        # A link destination is a relative in-app path or an http(s)/mailto/tel
+        # URL; javascript:/data:/etc are rejected to avoid XSS via the public page.
+        return validate_public_url(v, max_length=2048, allow_relative=True)
 
 
 class LinkCreate(LinkBase):

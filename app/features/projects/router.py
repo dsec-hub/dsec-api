@@ -61,7 +61,10 @@ def create_project(
     key: APIKey = Depends(require_api_key("write")),
 ) -> ProjectOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    proj = service.create_project(db, body.model_dump(exclude_unset=True))
+    try:
+        proj = service.create_project(db, body.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     return ProjectOut.model_validate(proj)
 
 
@@ -74,7 +77,10 @@ def update_project(
     key: APIKey = Depends(require_api_key("write")),
 ) -> ProjectOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    proj = service.update_project(db, project_id, body.model_dump(exclude_unset=True))
+    try:
+        proj = service.update_project(db, project_id, body.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if proj is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     return ProjectOut.model_validate(proj)
