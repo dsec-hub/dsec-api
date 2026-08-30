@@ -39,8 +39,12 @@ class ProjectBase(BaseModel):
         # These reach the public showcase's href/src — http(s) only (a repo/demo/
         # image link is never mailto:/tel:/relative). max_length matches the
         # String(512) columns, so an over-length value is a 422, not a DB error.
+        # These fields echo user-stored records: a blank clears the field, and a
+        # bare host (github.com/x) is normalised to https:// rather than rejected,
+        # so re-submitting an existing value on an unrelated PATCH can't 422.
         return validate_public_url(v, max_length=512, allow_relative=False,
-                                   schemes=("https", "http"))
+                                   schemes=("https", "http"),
+                                   blank_to_none=True, coerce_scheme="https")
 
 
 class ProjectCreate(ProjectBase):

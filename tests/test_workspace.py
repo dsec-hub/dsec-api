@@ -81,6 +81,25 @@ def test_project_normal_https_url_round_trips(client, rw_key):
     assert r.json()["repo_url"] == url
 
 
+def test_project_blank_url_normalises_to_null(client, rw_key):
+    # Echoing an empty field back must not 422 — it clears the field.
+    r = client.post("/projects", json={"name": "Blank", "repo_url": "  "}, headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["repo_url"] is None
+
+
+def test_project_bare_host_url_gets_https_prefix(client, rw_key):
+    # A schemeless host (as older rows / hub writes hold) is normalised, not rejected.
+    r = client.post("/projects", json={"name": "Bare", "repo_url": "github.com/dsec/x"},
+                    headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["repo_url"] == "https://github.com/dsec/x"
+    # ...and a PATCH echoing that bare host still succeeds.
+    pid = r.json()["id"]
+    assert client.patch(f"/projects/{pid}", json={"repo_url": "github.com/dsec/x"},
+                        headers=_h(rw_key)).status_code == 200
+
+
 def test_project_explicit_slug_is_slugified(client, rw_key):
     r = client.post("/projects", json={"name": "X", "slug": "My Cool Project!"}, headers=_h(rw_key))
     assert r.status_code == 201
