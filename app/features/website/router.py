@@ -255,7 +255,15 @@ def _public_project(
 @router.get("/projects", response_model=list[PublicProject])
 def public_projects(request: Request, db: Session = Depends(get_db)) -> list[PublicProject]:
     limiter.check_request(db, key_id=None, ip=client_ip(request))
-    rows = projects_service.list_projects(db, is_public=True, limit=100)
+    # A slugless project's card would link to `/projects/<nothing>` — a guaranteed
+    # 404, since the detail endpoint below looks up the real (unique) slug column
+    # and nothing resolves. The public feed is the authoritative boundary: drop
+    # rows with no slug, exactly as `/website/pages` filters `Document.slug.is_not(None)`.
+    # (A NULL slug is only reachable via a direct DB write, e.g. from dsec-hub.) (NEW-WEBDEEP-01)
+    rows = [
+        p for p in projects_service.list_projects(db, is_public=True, limit=100)
+        if p.slug
+    ]
     media_map = media_service.list_media_for(
         db, entity_type="project", entity_ids=[p.id for p in rows]
     )

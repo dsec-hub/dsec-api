@@ -8,6 +8,7 @@ no-op the router reports as ``409``. Parse failures are still recorded (as a
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select, update
@@ -25,7 +26,21 @@ from app.models import (
 from .parser import parse_membership, parse_pnl
 from .schemas import FinanceSummary, MembershipSummary
 
+log = logging.getLogger(__name__)
+
 REPORT_TYPES = ("membership", "pnl")
+
+# A membership report REPLACES the whole roster: _ingest_membership marks every
+# member not-current, then turns back on only the students present in this file.
+# So a truncated, mis-parsed or partially-delivered spreadsheet silently strands
+# every member it omits (they land on /locked). Refuse to ingest a membership
+# report whose row count has collapsed relative to the previous one — a real
+# term-boundary drop happens, but a sudden fall below this fraction of last week
+# is far more likely a bad file. Tune WITH the club (too tight and people learn to
+# click through the override). A human who has eyeballed the spreadsheet can still
+# apply a genuine mass drop via the override (settings.DUSA_INGEST_OVERRIDE, wired
+# to `override_roster_guard` at the ingest entry point). (NEW-APPDEEP-03)
+ROSTER_DROP_MIN_FRACTION = 0.8
 
 
 class DuplicateImport(Exception):
@@ -44,6 +59,14 @@ class IngestError(Exception):
         super().__init__(message)
 
 
+class RosterGuardRejected(Exception):
+    """Raised (before any write) when a membership import would gut the roster —
+    an empty report, or one whose row count has collapsed below
+    ``ROSTER_DROP_MIN_FRACTION`` of the previous report. The caller records the
+    import with a distinguishable status (``needs_review``) and a detail naming
+    both row counts, and leaves every member's ``is_current`` untouched."""
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -58,11 +81,18 @@ def handle_dusa_upload(
     sender: str | None = None,
     subject: str | None = None,
     received_at: datetime | None = None,
+    override_roster_guard: bool = False,
 ):
     """Ingest one uploaded workbook. Returns (import_row, rows, summary).
 
     Raises ``DuplicateImport`` if already ingested, ``IngestError`` on parse
-    failure (with a recorded failed import), or ``ValueError`` on bad input.
+    failure (with a recorded failed import), ``RosterGuardRejected`` if a
+    membership import would gut the roster (with a recorded ``needs_review``
+    import and the roster left untouched), or ``ValueError`` on bad input.
+
+    ``override_roster_guard`` (wired to ``settings.DUSA_INGEST_OVERRIDE`` at the
+    HTTP entry point) lets a human apply a genuine, reviewed mass drop; it never
+    bypasses the zero-row check.
     """
     if report_type not in REPORT_TYPES:
         raise ValueError(f"unknown report_type {report_type!r} (expected one of {REPORT_TYPES})")
@@ -100,7 +130,22 @@ def handle_dusa_upload(
     db.flush()  # assign imp.id for the FK
 
     if report_type == "membership":
-        rows = _ingest_membership(db, parsed, imp.id, report_date)
+        try:
+            rows = _ingest_membership(
+                db, parsed, imp.id, report_date, override=override_roster_guard
+            )
+        except RosterGuardRejected as rej:
+            # The guard runs BEFORE the destructive not-current sweep, so nothing
+            # was mutated. Record the import with a distinguishable status + both
+            # row counts (the detail) so it stands out loudly in the hub's import
+            # list rather than as a quiet "ok" row, then re-raise. Every member's
+            # is_current is left exactly as it was. (NEW-APPDEEP-03)
+            imp.status = "needs_review"
+            imp.detail = str(rej)
+            imp.rows_ingested = 0
+            db.commit()
+            log.warning("ingest: membership import %s rejected — %s", message_id, rej)
+            raise
         summary: MembershipSummary | FinanceSummary = MembershipSummary(
             total_members=parsed.total,
             dusa_member_count=parsed.dusa_member_count,
@@ -140,8 +185,51 @@ def _upsert_import(db, existing, report_type, message_id, filename, sender, subj
     return imp
 
 
-def _ingest_membership(db: Session, parsed, import_id: int, report_date: date) -> int:
-    """Upsert the roster by student_id; flip non-present members to not-current."""
+def _roster_guard_reason(db: Session, incoming_total: int, *, override: bool) -> str | None:
+    """Return WHY this membership import must be refused, or ``None`` to proceed.
+
+    An empty report is never legitimate and is refused even under ``override``. A
+    below-``ROSTER_DROP_MIN_FRACTION`` drop is refused unless ``override`` is set
+    (a deliberate, human-reviewed mass drop). The first-ever import has no baseline
+    and always proceeds (unless empty). ``MemberReport`` rows are only created for
+    successful membership imports, so the newest one is the right baseline.
+    """
+    if incoming_total <= 0:
+        return (
+            f"membership report has {incoming_total} rows — refusing to wipe the "
+            "roster (an empty report is never valid; the override does not apply)"
+        )
+    if override:
+        return None
+    prev_total = db.execute(
+        select(MemberReport.total_members).order_by(MemberReport.id.desc())
+    ).scalars().first()
+    if not prev_total or prev_total <= 0:
+        return None  # no prior baseline to compare against (first real import)
+    floor = ROSTER_DROP_MIN_FRACTION * prev_total
+    if incoming_total < floor:
+        return (
+            f"membership report has {incoming_total} rows, below "
+            f"{ROSTER_DROP_MIN_FRACTION:.0%} of the previous report's {prev_total} "
+            f"(floor {floor:.0f}) — refusing to wipe the roster. Set "
+            f"DUSA_INGEST_OVERRIDE to apply a genuine, reviewed mass drop."
+        )
+    return None
+
+
+def _ingest_membership(
+    db: Session, parsed, import_id: int | None, report_date: date, *, override: bool = False
+) -> int:
+    """Upsert the roster by student_id; flip non-present members to not-current.
+
+    Refuses (raising ``RosterGuardRejected`` BEFORE the destructive not-current
+    sweep, so nothing is mutated) an import that would gut the roster — see
+    ``_roster_guard_reason``. (NEW-APPDEEP-03)
+    """
+    reason = _roster_guard_reason(db, parsed.total, override=override)
+    if reason is not None:
+        raise RosterGuardRejected(reason)
+
     # The report IS the current paid list: start everyone not-current, then turn
     # the rows present in this report back on.
     db.execute(update(Member).values(is_current=False))

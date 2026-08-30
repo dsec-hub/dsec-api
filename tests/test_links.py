@@ -126,6 +126,33 @@ def test_links_url_validation(client, rw_key):
                         headers=_h(rw_key)).status_code == 200
 
 
+def test_links_reject_protocol_relative_urls(client, rw_key):
+    # A leading `//` (or `/\`, which browsers normalise to `//`) is NOT an in-app
+    # path — it is a protocol-relative URL pointing at another origin. The API is
+    # the producer and must reject it, not store it as if it were `/events`.
+    # (NEW-WEBDEEP-05)
+    for bad in ("//evil.com", "/\\evil.com"):
+        r = client.post("/links", json={"title": "X", "url": bad}, headers=_h(rw_key))
+        assert r.status_code == 422, f"{bad!r} should be rejected, got {r.status_code}: {r.text}"
+
+    # PATCH is gated by the same rule.
+    lid = client.post("/links", json={"title": "Events", "url": "/events"},
+                      headers=_h(rw_key)).json()["id"]
+    assert client.patch(f"/links/{lid}", json={"url": "//evil.com"},
+                        headers=_h(rw_key)).status_code == 422
+    assert client.patch(f"/links/{lid}", json={"url": "/\\evil.com"},
+                        headers=_h(rw_key)).status_code == 422
+
+
+def test_links_still_accept_valid_destinations(client, rw_key):
+    # The guard must not over-reject legitimate in-app paths or absolute URLs.
+    # (NEW-WEBDEEP-05)
+    for good in ("/events", "https://dsec.club", "mailto:admin@dsec.club", "tel:+61400000000"):
+        r = client.post("/links", json={"title": "X", "url": good}, headers=_h(rw_key))
+        assert r.status_code == 201, f"{good!r} should be accepted, got {r.status_code}: {r.text}"
+        assert r.json()["url"] == good
+
+
 def test_links_accent_max_length(client, rw_key):
     # an over-long accent returns a clean 422, not a DB 500
     assert client.post("/links", json={"title": "X", "url": "/x", "accent": "x" * 17},

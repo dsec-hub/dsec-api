@@ -275,3 +275,16 @@ def test_create_document_with_slug_and_conflicting_type_rejected(client, db):
         "title": "Bad", "slug": "bad-note", "type": "MeetingNotes",
     })
     assert r.status_code == 422
+
+
+def test_pageblocks_link_url_rejects_protocol_relative():
+    # `_link_url` (button/card/logo hrefs on custom pages) must treat `//host` and
+    # `/\host` as off-site, not as in-app paths — same guard as /links. The `//`
+    # case was already handled; this pins the `/\` case too. (NEW-WEBDEEP-05)
+    from app.features.website.pageblocks import _link_url
+
+    assert _link_url("/events") == "/events"
+    assert _link_url("https://dsec.club") == "https://dsec.club"
+    assert _link_url("mailto:hi@dsec.club") == "mailto:hi@dsec.club"
+    assert _link_url("//evil.com") is None
+    assert _link_url("/\\evil.com") is None

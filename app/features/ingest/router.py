@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core import logging as event_logging
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
@@ -82,11 +83,19 @@ async def ingest_dusa(
             sender=sender,
             subject=subject,
             received_at=_parse_dt(received_at),
+            override_roster_guard=settings.DUSA_INGEST_OVERRIDE,
         )
     except service.DuplicateImport as dup:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail=f"message {dup.existing.message_id} already ingested (import {dup.existing.id})",
+        )
+    except service.RosterGuardRejected as rej:
+        # The import is recorded as `needs_review` (roster untouched). Fail loudly
+        # so the Gmail forwarder does not treat the wipe-attempt as a success.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"membership import rejected and recorded for review: {rej}",
         )
     except ValueError as bad:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(bad))

@@ -63,7 +63,11 @@ def validate_public_url(
         if blank_to_none:
             return None
         # else: fall through to the scheme error (empty is not a destination)
-    elif allow_relative and v.startswith("/"):
+    elif allow_relative and v.startswith("/") and not v.startswith(("//", "/\\")):
+        # A leading `//` (or `/\`, which browsers normalise to `//` for http[s])
+        # is NOT an in-app path — it is a protocol-relative URL pointing at another
+        # origin. Only a genuine single-slash relative path is accepted here; the
+        # `//`/`/\` forms fall through and are rejected below. (NEW-WEBDEEP-05)
         if len(v) > max_length:
             raise _too_long(max_length)
         return v

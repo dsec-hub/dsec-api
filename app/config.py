@@ -238,6 +238,16 @@ class Settings(BaseSettings):
     # start narrating bookings; flip on to get booking pings in the channel.
     CALCOM_NOTIFY_DISCORD: bool = False
 
+    # --- DUSA membership ingest safety valve ---
+    # A membership import replaces the whole roster (see ingest/service.py): it
+    # marks everyone not-current, then turns back on only the students in this
+    # week's file. The ingest refuses a report that is empty or has collapsed
+    # relative to the previous week, so a truncated/mis-parsed spreadsheet cannot
+    # silently lock out every omitted member. Set this True for ONE deliberate,
+    # human-reviewed mass drop (e.g. a real term rollover), then set it back — it
+    # bypasses the fractional-drop check but NEVER the zero-row check. (NEW-APPDEEP-03)
+    DUSA_INGEST_OVERRIDE: bool = False
+
     # --- Structured logging (host log drains) ---
     # LOG_FORMAT="json" emits one JSON object per line (timestamp, level, logger,
     # message, + any structured extras) for a log drain / aggregator to parse;

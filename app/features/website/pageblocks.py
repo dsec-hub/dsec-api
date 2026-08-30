@@ -94,7 +94,9 @@ def _link_url(v: Any) -> str | None:
     s = _str(v, max_len=2048)
     if not s:
         return None
-    if s.startswith("/") and not s.startswith("//"):
+    # A leading `//` (or `/\`, which browsers normalise to `//`) is a protocol-
+    # relative URL to another origin, not an in-app path — reject both. (NEW-WEBDEEP-05)
+    if s.startswith("/") and not s.startswith(("//", "/\\")):
         return s
     try:
         p = urlparse(s)
