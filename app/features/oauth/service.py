@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -122,8 +123,14 @@ def verify_pkce(verifier: str, challenge: str, method: str) -> bool:
 def get_client(db: Session, client_id: str) -> OAuthClient | None:
     if not client_id:
         return None
+    # NEW-APIROUTERS-04: a revoked client is treated as if it does not exist, so
+    # /oauth/authorize shows "Unknown application" and /oauth/token rejects it.
+    # This is the ONLY read path for OAuthClient, so the filter covers every use.
     return db.execute(
-        select(OAuthClient).where(OAuthClient.client_id == client_id)
+        select(OAuthClient).where(
+            OAuthClient.client_id == client_id,
+            OAuthClient.revoked.is_(False),
+        )
     ).scalar_one_or_none()
 
 
@@ -146,6 +153,7 @@ def register_client(
     response_types: list[str],
     token_endpoint_auth_method: str,
     scope: str | None,
+    first_seen_ip: str | None = None,
 ) -> tuple[OAuthClient, str | None]:
     """Create a client (RFC 7591). Returns (row, raw_secret_or_None)."""
     client_id = "dsec_client_" + secrets.token_urlsafe(16)
@@ -163,6 +171,7 @@ def register_client(
         response_types=response_types,
         token_endpoint_auth_method=token_endpoint_auth_method,
         scope=scope,
+        first_seen_ip=first_seen_ip,  # NEW-APIROUTERS-04: who registered it
     )
     db.add(row)
     db.commit()
@@ -346,6 +355,24 @@ def verify_access_token(raw: str, db: Session) -> OAuthToken | None:
         return None
     if _aware(row.access_expires_at) <= now():
         return None
+    # SEC-07a: re-check the account on EVERY token use, not just at first login.
+    # Deactivating a committee member in the hub must kill their live connector
+    # immediately — otherwise the 60-day access/refresh chain keeps working for
+    # someone who left. app_user is part of dsec-api's OWN Alembic chain, so the
+    # table exists in every real deploy and in the SQLite test DB.
+    #
+    # FAIL CLOSED on error: this is an auth check. If the app_user row cannot be
+    # read (a genuinely broken/degraded DB), deny rather than allow. This is the
+    # DELIBERATE OPPOSITE of the fail-OPEN fallback in users._role_perms /
+    # allowed_scopes_for, which trades safety for availability on a non-auth path;
+    # re-using that fail-open behaviour for an auth decision would be the bug.
+    try:
+        user = db.get(AppUser, row.user_id)
+    except SQLAlchemyError:
+        db.rollback()  # clear the aborted transaction before the caller reuses it
+        return None
+    if user is None or not user.is_active:
+        return None
     return row
 
 
@@ -423,3 +450,23 @@ def revoke_family(db: Session, *, client_id: str, user_id: int) -> None:
         changed = True
     if changed:
         db.commit()
+
+
+def revoke_client_tokens(db: Session, *, client_id: str) -> int:
+    """Revoke every active token issued for a client (across ALL users), returning
+    the count. Does NOT commit — the caller commits it in the same transaction as
+    the client-revoke so the two land atomically.
+
+    verify_access_token checks only the token's own state (not the client's), so
+    revoking OAuthClient.revoked alone would leave already-issued access tokens
+    working until their ~1h expiry. Killing the tokens here makes client
+    revocation take effect immediately (NEW-APIROUTERS-04)."""
+    rows = db.execute(
+        select(OAuthToken).where(
+            OAuthToken.client_id == client_id,
+            OAuthToken.revoked == False,  # noqa: E712 — SQL boolean, not Python
+        )
+    ).scalars().all()
+    for r in rows:
+        r.revoked = True
+    return len(rows)

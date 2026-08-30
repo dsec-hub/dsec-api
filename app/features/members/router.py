@@ -89,6 +89,13 @@ def member_verification_code(
     member_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    # SEC-06 deploy-2: this route stays on read:members for now. DO NOT change it
+    # to require_api_key("read:membercard") until the OWNER has granted
+    # read:membercard to dsec-app's LIVE service-key row (an UPDATE on that
+    # api_key.scopes array) and verified the card still works. require_api_key
+    # checks each needed scope with has_scope, so a key lacking read:membercard is
+    # rejected the instant the route requires it — flipping this before the grant
+    # breaks the digital membership card in production for every student.
     key: APIKey = Depends(require_api_key("read:members")),
 ) -> MemberVerification:
     """The member's own digital-membership-card data (code + QR + status)."""

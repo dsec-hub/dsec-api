@@ -83,6 +83,20 @@ class APIKey(Base):
         DateTime(timezone=True), nullable=True
     )
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # NULL = never expires. Every PRE-EXISTING row (including dsec-app's and
+    # dsec-hub's shared service keys) was backfilled to NULL by migration
+    # d8b3f6a1c4e7, so adding expiry enforcement cannot kill them; only NEWLY
+    # minted keys get a default 180-day expiry (see core.apikeys.default_key_expiry
+    # / admin.self_create_key). Enforced in core.apikeys.verify_key (SEC-07c).
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # SEC-06 deploy-3: the key that minted this one via POST /admin/keys/self.
+    # NULL for owner/service keys. Revoking a parent cascades to its children (see
+    # admin.revoke_key), closing the "child key survives parent revocation" hole.
+    parent_key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_key.id"), index=True, nullable=True
+    )
 
 
 class RateLimit(Base):
@@ -1515,6 +1529,14 @@ class OAuthClient(Base):
     token_endpoint_auth_method: Mapped[str] = mapped_column(
         String(32), default="none", server_default="none"
     )
+    # NEW-APIROUTERS-04: DCR is open by design, so a malicious client can't be
+    # blocked at registration — it must be revocable afterwards. get_client filters
+    # on revoked, so a revoked client is invisible to /oauth/authorize and
+    # /oauth/token. first_seen_ip records the registering caller for triage.
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+    first_seen_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

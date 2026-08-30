@@ -147,6 +147,9 @@ button:active { transform:scale(.985); }
 .deny:hover { background:var(--elevated); color:var(--fg); border-color:var(--border-strong); }
 .err { background:rgba(255,32,71,.12); color:#ff9aac; border:1px solid rgba(255,32,71,.4);
        padding:10px 13px; border-radius:var(--r-control); font-size:13px; line-height:1.45; margin-bottom:18px; }
+.warn { background:rgba(255,176,32,.12); color:#ffcf7a; border:1px solid rgba(255,176,32,.45);
+        padding:10px 13px; border-radius:var(--r-control); font-size:13px; line-height:1.45; margin-bottom:18px; }
+p.sub.dest { margin:0 0 16px; }
 .foot { color:var(--muted); font-size:12px; line-height:1.5; margin:20px 0 0; text-align:center; }
 .foot .arrow { color:var(--fg); }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
@@ -166,10 +169,39 @@ def _scope_rows(scopes: list[str]) -> str:
     return "".join(out)
 
 
-def render_consent(*, req_token: str, client_name: str, scopes: list[str], error: str | None = None) -> str:
-    """The combined login + consent page."""
+def render_consent(
+    *,
+    req_token: str,
+    client_name: str,
+    scopes: list[str],
+    redirect_host: str = "",
+    trusted: bool = True,
+    error: str | None = None,
+) -> str:
+    """The combined login + consent page.
+
+    ``redirect_host`` is the callback host the authorization code will be sent to
+    (NEW-APIROUTERS-04). It is named explicitly above the form so a phishing
+    client registered under a familiar-looking ``client_name`` can't hide where
+    the user is really being sent. When ``trusted`` is false (the host is not on
+    ``settings.oauth_trusted_redirect_hosts``) a prominent "not verified" warning
+    is shown. Both values are HTML-escaped like everything else on this page.
+    """
     err_html = f'<div class="err">{html.escape(error)}</div>' if error else ""
     client = html.escape(client_name or "An application")
+    host = html.escape(redirect_host or "an unknown address")
+    dest_html = (
+        f'<p class="sub dest">You will be sent to <span class="client">{host}</span>'
+        f" after you approve.</p>"
+    )
+    warn_html = (
+        ""
+        if trusted
+        else (
+            '<div class="warn">DSEC has not verified this application. Only sign in'
+            " if you started this yourself and recognise the address above.</div>"
+        )
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -180,6 +212,8 @@ def render_consent(*, req_token: str, client_name: str, scopes: list[str], error
   <h1>Connect to the DSEC workspace</h1>
   <p class="sub"><span class="client">{client}</span> wants to access the DSEC
      workspace on your behalf. Sign in to approve.</p>
+  {dest_html}
+  {warn_html}
   {err_html}
   <form method="post" action="/oauth/authorize" autocomplete="on">
     <input type="hidden" name="req" value="{html.escape(req_token)}">

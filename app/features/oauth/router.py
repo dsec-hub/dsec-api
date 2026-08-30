@@ -16,8 +16,10 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core.net import client_ip
 from app.core.ratelimit import limiter
 from app.core.usage import log_usage
@@ -25,6 +27,7 @@ from app.db import get_db
 from app.features.oauth import metadata, pages
 from app.features.oauth import service, users
 from app.features.oauth.service import SUPPORTED_SCOPES
+from app.models import AppUser
 
 router = APIRouter()
 
@@ -122,6 +125,7 @@ async def register(request: Request, db: Session = Depends(get_db)) -> JSONRespo
         response_types=[str(r) for r in response_types][:8],
         token_endpoint_auth_method=auth_method,
         scope=" ".join(sorted(set(pool))),
+        first_seen_ip=client_ip(request),
     )
     out = {
         "client_id": client.client_id,
@@ -147,6 +151,27 @@ def _register_error(error: str, desc: str) -> JSONResponse:
 # Authorization endpoint (login + consent)
 # --------------------------------------------------------------------------- #
 
+def _coarse_grant(scopes: list[str]) -> set[str]:
+    """Reconstruct the coarse OAuth grant (read/write/trigger/ingest) that an
+    already-expanded, stored scope list implies, so it can be re-expanded against
+    the user's LIVE role on refresh (SEC-07b).
+
+    A per-module ``read:X``/``write:X`` implies the coarse ``read``/``write`` the
+    user consented to, even when the expanded grant dropped the bare coarse token
+    (an enforced-module-only grant carries only ``read:finance`` etc.).
+    """
+    coarse: set[str] = set()
+    if "read" in scopes or any(s.startswith("read:") for s in scopes):
+        coarse.add("read")
+    if "write" in scopes or any(s.startswith("write:") for s in scopes):
+        coarse.add("write")
+    if "trigger" in scopes:
+        coarse.add("trigger")
+    if "ingest" in scopes:
+        coarse.add("ingest")
+    return coarse
+
+
 def _norm_scopes(raw_scope: str | None, client_scope: str | None) -> list[str]:
     allowed = set(client_scope.split()) if client_scope else set(SUPPORTED_SCOPES)
     pool = [s for s in SUPPORTED_SCOPES if s in allowed]  # supported ∩ client-allowed, ordered
@@ -161,6 +186,13 @@ def _append_query(uri: str, params: dict) -> str:
     q = dict(parse_qsl(parts.query, keep_blank_values=True))
     q.update({k: v for k, v in params.items() if v is not None})
     return urlunparse(parts._replace(query=urlencode(q)))
+
+
+def _redirect_host_trust(redirect_uri: str) -> tuple[str, bool]:
+    """(host, trusted) for the consent page (NEW-APIROUTERS-04). ``trusted`` is
+    whether the redirect host is on ``settings.oauth_trusted_redirect_hosts``."""
+    host = (urlparse(redirect_uri).hostname or "").lower()
+    return host, host in settings.oauth_trusted_redirect_hosts
 
 
 def _redirect_error(uri: str, error: str, state: str | None, desc: str | None = None) -> RedirectResponse:
@@ -183,6 +215,9 @@ def authorize_get(
     resource: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
+    # NEW-APIROUTERS-04: rate-limit the consent page like every other
+    # unauthenticated route (it was the one that had no limiter.check_request).
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     client = service.get_client(db, client_id or "")
     if client is None:
         return HTMLResponse(
@@ -212,7 +247,11 @@ def authorize_get(
         "code_challenge_method": code_challenge_method,
         "resource": resource,
     })
-    html = pages.render_consent(req_token=req_token, client_name=client.client_name, scopes=scopes)
+    host, trusted = _redirect_host_trust(redirect_uri)
+    html = pages.render_consent(
+        req_token=req_token, client_name=client.client_name, scopes=scopes,
+        redirect_host=host, trusted=trusted,
+    )
     return HTMLResponse(html, headers=_FRAME_GUARD)
 
 
@@ -289,9 +328,11 @@ def _consent_again(payload: dict, client, error: str) -> HTMLResponse:
         "code_challenge_method": payload.get("code_challenge_method", "S256"),
         "resource": payload.get("resource"),
     })
+    host, trusted = _redirect_host_trust(payload["redirect_uri"])
     html = pages.render_consent(
         req_token=req_token, client_name=client.client_name,
-        scopes=payload["scope"].split(), error=error,
+        scopes=payload["scope"].split(), redirect_host=host, trusted=trusted,
+        error=error,
     )
     return HTMLResponse(html, status_code=200, headers=_FRAME_GUARD)
 
@@ -370,11 +411,40 @@ async def token(request: Request, db: Session = Depends(get_db)):
         if not res.ok or res.token is None:
             return _token_error(res.error or "invalid_grant", 400)
         old = res.token
-        scope = old.scope
+        original = old.scope.split()
+        # SEC-07b: re-derive scopes from the user's LIVE role on every refresh,
+        # then intersect with the original grant. A role that has SHRUNK yields a
+        # narrower token; a role that has GROWN gains nothing it wasn't first
+        # granted. Previously the scope string was copied verbatim across refresh,
+        # so a connector authorised in March kept March's permissions in December.
+        try:
+            user = db.get(AppUser, old.user_id)
+        except SQLAlchemyError:
+            # FAIL CLOSED: on a transient lookup failure, DO NOT rotate. Retaining
+            # the frozen grant and issuing a fresh 60-day window could let an
+            # inactive account slip a new refresh chain through a blip — the exact
+            # "last year's committee still holding a credential" threat. The
+            # presented refresh token is untouched, so a genuine client simply
+            # retries once the DB recovers.
+            db.rollback()
+            return _token_error("invalid_grant", 400, "could not verify the account")
+        if user is None or not user.is_active:
+            # Deleted OR deactivated → kill the whole refresh chain, don't re-issue.
+            # A missing app_user row is treated exactly like an inactive one so a
+            # deleted account's refresh chain cannot live on forever.
+            service.revoke_family(db, client_id=old.client_id, user_id=old.user_id)
+            return _token_error("invalid_grant", 400, "account is inactive")
+        rederived = set(service.scopes_for_grant(db, user, _coarse_grant(original)))
+        scope_tokens = [s for s in original if s in rederived]  # narrow only
         req_scope = str(form.get("scope") or "").split()
-        if req_scope:  # refresh may only narrow scope, never widen it
-            narrowed = [s for s in old.scope.split() if s in req_scope]
-            scope = " ".join(narrowed) if narrowed else old.scope
+        if req_scope:  # a client may narrow further, never widen
+            narrowed = [s for s in scope_tokens if s in req_scope]
+            if narrowed:
+                scope_tokens = narrowed
+        scope = " ".join(scope_tokens)
+        if not scope:
+            # The live role no longer grants any of the originally-consented scopes.
+            return _token_error("invalid_grant", 400, "the account no longer holds any granted scope")
         old.revoked = True  # rotation: the presented refresh token is now spent
         db.commit()
         tokens = service.issue_tokens(

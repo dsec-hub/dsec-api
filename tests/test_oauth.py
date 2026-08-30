@@ -451,6 +451,187 @@ def test_revoke_unknown_token_is_ok(client):
 # scope bounding by role (fallback mapping; admin keeps ingest)
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# SEC-07(a): the access token is re-checked against the live account
+# --------------------------------------------------------------------------- #
+
+def test_access_token_rejected_after_user_deactivated(client, db, user):
+    """Deactivating a user in the hub must invalidate their live access token on
+    the very next check — not only at the 60-day refresh boundary."""
+    _, tok = _issue(client, user)
+    assert service.verify_access_token(tok["access_token"], db) is not None
+    user.is_active = False
+    db.commit()
+    assert service.verify_access_token(tok["access_token"], db) is None
+
+
+def test_access_token_rejected_when_user_row_missing(client, db, user):
+    """Fail CLOSED: if the app_user row can't be resolved, the token is denied."""
+    _, tok = _issue(client, user)
+    db.delete(user)
+    db.commit()
+    assert service.verify_access_token(tok["access_token"], db) is None
+
+
+def test_refresh_denied_for_deactivated_user(client, db, user):
+    """A deactivated account can't refresh — the whole chain is killed."""
+    cid, tok = _issue(client, user)
+    user.is_active = False
+    db.commit()
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+
+
+def test_refresh_denied_for_deleted_user(client, db, user):
+    """A deleted account is treated exactly like an inactive one — the refresh
+    chain is killed, not silently rotated forward forever."""
+    cid, tok = _issue(client, user)
+    db.delete(user)
+    db.commit()
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+
+
+def test_refresh_fails_closed_on_lookup_error_without_rotating(client, user, monkeypatch):
+    """On a transient app_user lookup failure the refresh is denied AND the
+    presented refresh token is NOT spent — so an inactive account can't slip a
+    fresh window through a blip, and a genuine client just retries."""
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.orm import Session
+
+    from app.models import AppUser as _AppUser
+
+    cid, tok = _issue(client, user)
+    real_get = Session.get
+
+    def boom(self, entity, ident, *args, **kwargs):
+        if entity is _AppUser:
+            raise SQLAlchemyError("simulated lookup failure")
+        return real_get(self, entity, ident, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "get", boom)
+    bad = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert bad.status_code == 400 and bad.json()["error"] == "invalid_grant"
+
+    # The refresh token was NOT rotated: with the DB healthy again it still works.
+    monkeypatch.undo()
+    good = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert good.status_code == 200, good.text
+
+
+# --------------------------------------------------------------------------- #
+# SEC-07(b): refresh re-derives scopes from the live role (narrow-only)
+# --------------------------------------------------------------------------- #
+
+def test_refresh_narrows_scope_when_role_shrinks(client, user, monkeypatch):
+    """A role that shrank since issuance yields a NARROWER token on refresh."""
+    cid, tok = _issue(client, user)  # exec fallback → read write trigger
+    # Simulate the live role now granting read-only.
+    monkeypatch.setattr(service, "scopes_for_grant", lambda db, u, coarse: ["read"])
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 200, r.text
+    assert set(r.json()["scope"].split()) == {"read"}  # lost write + trigger
+
+
+def test_refresh_never_widens_beyond_original_grant(client, user, monkeypatch):
+    """Even if the live role now grants MORE, refresh can only ever narrow the
+    scopes the user first consented to — it never widens them."""
+    cid, tok = _issue(client, user)  # read write trigger
+    monkeypatch.setattr(
+        service, "scopes_for_grant",
+        lambda db, u, coarse: ["read", "write", "trigger", "ingest", "read:finance"],
+    )
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 200, r.text
+    got = set(r.json()["scope"].split())
+    assert got == {"read", "write", "trigger"}
+    assert "ingest" not in got and "read:finance" not in got
+
+
+# --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-04: consent-page destination + client revocation
+# --------------------------------------------------------------------------- #
+
+_ADMIN_BASIC = ("admin", "test-dashboard-pass")  # conftest DASHBOARD_USER / _PASS
+
+
+def test_consent_page_names_untrusted_host_and_warns(client):
+    """The callback host is shown, and an untrusted host (default claude.ai is not
+    on the allowlist) triggers the 'not verified' warning above the form."""
+    reg = _register(client)  # redirect on claude.ai
+    _, challenge = _pkce()
+    g = _authorize_get(client, client_id=reg["client_id"], redirect_uri=reg["redirect_uris"][0], challenge=challenge)
+    assert g.status_code == 200
+    assert "claude.ai" in g.text
+    assert "DSEC has not verified this application" in g.text
+
+
+def test_consent_page_trusted_host_has_no_warning(client):
+    reg = _register(client, redirect_uris=["https://hub.dsec.club/callback"])
+    _, challenge = _pkce()
+    g = _authorize_get(client, client_id=reg["client_id"], redirect_uri=reg["redirect_uris"][0], challenge=challenge)
+    assert g.status_code == 200
+    assert "hub.dsec.club" in g.text
+    assert "has not verified" not in g.text
+
+
+def test_admin_oauth_clients_requires_basic_auth(client):
+    _register(client)
+    assert client.get("/admin/oauth/clients").status_code == 401
+    listed = client.get("/admin/oauth/clients", auth=_ADMIN_BASIC)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["revoked"] is False
+    assert listed.json()[0]["first_seen_ip"]  # captured at registration
+
+
+def test_revoked_client_rejected_at_authorize_and_token(client, user):
+    cid, code, verifier = _full_authorize(client, user)  # works while active
+    # Revoke the client (basic-auth admin).
+    assert client.get("/admin/oauth/clients/xxx/revoke").status_code in (401, 405)
+    rev = client.post(f"/admin/oauth/clients/{cid}/revoke", auth=_ADMIN_BASIC)
+    assert rev.status_code == 200 and rev.json()["revoked"] is True
+    # Idempotent.
+    assert client.post(f"/admin/oauth/clients/{cid}/revoke", auth=_ADMIN_BASIC).json()["revoked"] is True
+
+    # /oauth/authorize now treats it as unknown.
+    _, challenge = _pkce()
+    g = client.get("/oauth/authorize", params={
+        "response_type": "code", "client_id": cid, "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    }, follow_redirects=False)
+    assert g.status_code == 400 and "Unknown application" in g.text
+
+    # /oauth/token rejects the (already-issued) code because the client is gone.
+    t = client.post("/oauth/token", data={
+        "grant_type": "authorization_code", "code": code, "client_id": cid, "code_verifier": verifier,
+    })
+    assert t.status_code == 401 and t.json()["error"] == "invalid_client"
+
+
+def test_revoking_client_kills_existing_access_tokens(client, db, user):
+    """Revoking a client immediately invalidates tokens already issued for it —
+    they must not keep hitting MCP until their ~1h expiry."""
+    cid, tok = _issue(client, user)
+    assert service.verify_access_token(tok["access_token"], db) is not None
+    r = client.post(f"/admin/oauth/clients/{cid}/revoke", auth=_ADMIN_BASIC)
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    db.rollback()  # end this session's read snapshot so it sees the committed revoke
+    assert service.verify_access_token(tok["access_token"], db) is None
+
+
 def test_admin_role_can_grant_ingest(client, db):
     pw = bcrypt.hashpw(b"adminpass-adminpass", bcrypt.gensalt(rounds=4)).decode()
     db.add(AppUser(email="admin@dsec.club", name="Admin", password_hash=pw, role="admin", is_active=True))
