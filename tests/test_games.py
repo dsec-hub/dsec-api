@@ -359,8 +359,12 @@ def test_cron_close_draw_route(client, rw_key, db, monkeypatch):
 
 
 def test_draw_routes_reject_invalid_period_key(client, ro_key, db):
-    """A malformed period_key is a 422 and must not persist a DrawCycle row."""
-    for bad in ("abc", "2026", "2026-08-01", "2026-13"):
+    """A malformed period_key is a 422 and must not persist a DrawCycle row.
+
+    Includes the regex-passing extremes 0000-01 / 9999-12 whose month_bounds are
+    not constructible — these used to commit a junk row then 500.
+    """
+    for bad in ("abc", "2026", "2026-08-01", "2026-13", "0000-01", "9999-12"):
         r = client.get(f"/games/draw?period_key={bad}", headers=_h(ro_key))
         assert r.status_code == 422, (bad, r.text)
     assert db.execute(select(models.DrawCycle)).scalars().first() is None
@@ -371,8 +375,9 @@ def test_cron_close_draw_rejects_invalid_period_key(client, db, monkeypatch):
 
     monkeypatch.setattr(settings, "CRON_SECRET", "test-cron")
     hdr = {"Authorization": "Bearer test-cron"}
-    r = client.get("/games/cron/close-draw?period_key=abc", headers=hdr)
-    assert r.status_code == 422, r.text
+    for bad in ("abc", "0000-01", "9999-12"):
+        r = client.get(f"/games/cron/close-draw?period_key={bad}", headers=hdr)
+        assert r.status_code == 422, (bad, r.text)
     assert db.execute(select(models.DrawCycle)).scalars().first() is None
 
 

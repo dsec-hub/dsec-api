@@ -23,8 +23,21 @@ _PERIOD_KEY_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def is_valid_period_key(period_key: str) -> bool:
-    """True for a well-formed YYYY-MM key with a real month (01-12)."""
-    return bool(_PERIOD_KEY_RE.match(period_key or ""))
+    """True for a well-formed YYYY-MM key with a real month (01-12) whose UTC
+    month bounds are actually constructible.
+
+    The regex alone accepts extremes like ``0000-01`` and ``9999-12`` that then
+    blow up in ``month_bounds`` (``datetime(0, …)`` / ``datetime(10000, …)`` are
+    out of range) — and in ``get_draw`` that raise lands AFTER a DrawCycle row is
+    committed, leaving a junk row and a 500. Range-checking here lets both routes
+    reject with a 422 before any DB write."""
+    if not _PERIOD_KEY_RE.match(period_key or ""):
+        return False
+    try:
+        month_bounds(period_key)
+    except (ValueError, OverflowError):
+        return False
+    return True
 
 
 def _utcnow() -> datetime:
