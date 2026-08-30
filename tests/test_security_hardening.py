@@ -72,6 +72,24 @@ def test_oversized_body_allowed_on_exempt_upload_route(client):
     assert resp.status_code != 413
 
 
+def test_oversized_body_rejected_on_lookalike_prefix_route(client):
+    """/mcp-setup is NOT /mcp: a bare prefix match used to exempt it from the cap.
+
+    The middleware runs before routing, so a 413 comes back even though
+    /mcp-setup/anything has no handler (which is the property being tested).
+    """
+    big = "x" * 200_000
+    resp = client.post("/mcp-setup/anything", content=big)
+    assert resp.status_code == 413
+
+
+def test_exempt_prefix_still_exempt_on_subpaths(client):
+    """The real exempt routes must keep their exemption."""
+    big = "x" * 200_000
+    assert client.post("/media", content=big).status_code != 413
+    assert client.post("/media/upload", content=big).status_code != 413
+
+
 def test_calcom_webhook_fails_closed_in_production_without_secret(client, monkeypatch):
     """With no CALCOM_WEBHOOK_SECRET, the booking webhook must not accept writes
     in production — it returns 503 instead of creating a SponsorLead."""
