@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.apikeys import SCOPE_ISOLATED_MODULES
 from app.models import AppUser, OAuthAuthCode, OAuthClient, OAuthToken
 
 # Scopes the authorization server understands and advertises (the coarse model a
@@ -30,19 +31,24 @@ from app.models import AppUser, OAuthAuthCode, OAuthClient, OAuthToken
 # (Sponsors, Finance) are carried as per-module scopes, never blanket read/write.
 SUPPORTED_SCOPES = ("read", "write", "trigger", "ingest")
 
-# Modules whose MCP tools are isolated behind per-module scopes. Every other
-# module stays "focus-only": represented by the legacy coarse read/write, so the
-# broad tools keep working unchanged.
+# Modules whose OAuth grant is represented by per-module scopes instead of the
+# legacy coarse read/write. Every other module stays "focus-only": represented by
+# the legacy coarse read/write, so the broad tools keep working unchanged.
 #
-# members/people/documents were added when those routes moved to granular scopes:
-# without them here an OAuth grant for a role touching any of the three would fall
-# through to blanket `read`, which satisfies every read:* and so would defeat the
-# isolation for OAuth tokens. NOTE: a role that ALSO grants a focus-only module
-# (events, tasks, …) still receives blanket read/write, because those modules have
-# no granular scope — so full OAuth isolation of members/people/documents only
-# holds for a role scoped exclusively to enforced modules until the remaining
-# focus-only modules are rolled out too.
-ENFORCED_MODULES = ("finance", "sponsors", "members", "people", "documents")
+# finance/sponsors come from core.apikeys.SCOPE_ISOLATED_MODULES (the single home
+# for that pair — they are also isolated in `has_scope`, so even a blanket key
+# can't reach them). members/people/documents are added here: their routes moved
+# to granular scopes, so an OAuth grant for a role touching any of the three must
+# NOT fall through to blanket `read` (which satisfies every read:* and would defeat
+# the isolation for OAuth tokens). Unlike finance/sponsors, they stay reachable by
+# a legacy key at the has_scope layer — the isolation is only at issuance.
+#
+# NOTE: a role that ALSO grants a focus-only module (events, tasks, …) still
+# receives blanket read/write, because those modules have no granular scope — so
+# full OAuth isolation of members/people/documents only holds for a role scoped
+# exclusively to enforced modules until the remaining focus-only modules are
+# rolled out too.
+ENFORCED_MODULES = SCOPE_ISOLATED_MODULES + ("members", "people", "documents")
 
 # Every gateable workspace module (mirrors dsec-hub ROLES.md). "admin" is a
 # superuser flag rather than a data module, so it is expanded to "all modules"
@@ -241,12 +247,20 @@ def scopes_for_grant(db: Session, user: AppUser, coarse_granted: set[str]) -> li
     """Expand a coarse OAuth grant (read/write/trigger/ingest the user actually
     approved) into the module-aware scope list enforced at the MCP tool layer.
 
-    The enforced modules (Sponsors, Finance) are represented EXCLUSIVELY by their
-    per-module scopes (``read:sponsors``, ``write:finance``, …) and ONLY for a
-    user whose role actually grants the module — so a login without the module
-    never receives that module's scope and can't reach the isolated tools by
-    name. Every other (focus-only) module additionally yields the legacy coarse
-    ``read``/``write`` so the broad tools behave exactly as before.
+    An enforced module (``ENFORCED_MODULES``) is represented by its per-module
+    scopes (``read:sponsors``, ``write:finance``, …) and ONLY for a user whose
+    role actually grants the module — so a login without the module never receives
+    that module's scope. Every focus-only module (one with no granular scope, e.g.
+    events/tasks) additionally yields the legacy coarse ``read``/``write``.
+
+    Consequence to be honest about: because ANY focus-only module adds blanket
+    ``read``/``write``, a role that mixes focus-only and enforced modules still
+    carries the coarse scopes. That is safe for finance/sponsors — ``has_scope``
+    isolates those even against blanket read/write (see
+    ``core.apikeys.SCOPE_ISOLATED_MODULES``) — but it means members/people/
+    documents isolation via OAuth only fully holds for a role scoped exclusively
+    to enforced modules. A legacy key still reaches those three at the has_scope
+    layer by design.
 
     The user's role modules come from ``app_role`` via ``app_user.role_id`` (the
     same defensive join ``users.allowed_scopes_for`` uses). When those RBAC

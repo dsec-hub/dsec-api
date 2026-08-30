@@ -41,10 +41,14 @@ def add_contact(db: Session, sponsor_id: int, data: dict) -> SponsorContact:
     return contact
 
 
-def update_contact(db: Session, contact_id: int, data: dict) -> SponsorContact | None:
+def update_contact(
+    db: Session, contact_id: int, data: dict, *, sponsor_id: int | None = None
+) -> SponsorContact | None:
     contact = db.get(SponsorContact, contact_id)
     if contact is None:
         return None
+    if sponsor_id is not None and contact.sponsor_id != sponsor_id:
+        return None  # the child exists, but not under the parent the caller named
     for key, value in data.items():
         setattr(contact, key, value)
     db.commit()
@@ -52,10 +56,14 @@ def update_contact(db: Session, contact_id: int, data: dict) -> SponsorContact |
     return contact
 
 
-def remove_contact(db: Session, contact_id: int) -> SponsorContact | None:
+def remove_contact(
+    db: Session, contact_id: int, *, sponsor_id: int | None = None
+) -> SponsorContact | None:
     contact = db.get(SponsorContact, contact_id)
     if contact is None:
         return None
+    if sponsor_id is not None and contact.sponsor_id != sponsor_id:
+        return None  # the child exists, but not under the parent the caller named
     contact.archived = True
     db.commit()
     db.refresh(contact)

@@ -14,8 +14,13 @@ from app.core.apikeys import generate_key
 @pytest.fixture
 def rw_key(db):
     gen = generate_key()
-    db.add(models.APIKey(name="rw", prefix=gen.prefix, key_hash=gen.key_hash,
-                         scopes=["read", "write"]))
+    # A full committee key. Since SEC-05, blanket read/write no longer reaches the
+    # isolated finance/sponsors modules, so exercising those routes needs their
+    # per-module scopes explicitly.
+    db.add(models.APIKey(
+        name="rw", prefix=gen.prefix, key_hash=gen.key_hash,
+        scopes=["read", "write", "read:sponsors", "write:sponsors", "read:finance", "write:finance"],
+    ))
     db.commit()
     return gen.raw_key
 
@@ -46,6 +51,95 @@ def test_projects_crud_and_scope(client, rw_key, ro_key):
     assert client.patch(f"/projects/{pid}", json={"status": "Completed"}, headers=_h(rw_key)).json()["status"] == "Completed"
     assert client.post(f"/projects/{pid}/archive", headers=_h(rw_key)).json()["archived"] is True
     assert len(client.get("/projects", headers=_h(ro_key)).json()) == 0  # archived excluded
+
+
+# --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-07: project URL + slug validation before the public showcase
+# --------------------------------------------------------------------------- #
+
+def test_project_url_fields_reject_dangerous_schemes(client, rw_key):
+    for field in ("repo_url", "demo_url", "image_url"):
+        for bad in ("javascript:alert(1)", "data:text/html,x", "vbscript:msgbox(1)"):
+            r = client.post("/projects", json={"name": "P", field: bad}, headers=_h(rw_key))
+            assert r.status_code == 422, (field, bad, r.text)
+    # ...and on PATCH too.
+    pid = client.post("/projects", json={"name": "Patchy"}, headers=_h(rw_key)).json()["id"]
+    assert client.patch(f"/projects/{pid}", json={"repo_url": "javascript:alert(1)"},
+                        headers=_h(rw_key)).status_code == 422
+
+
+def test_project_url_over_length_is_422_not_db_error(client, rw_key):
+    long_url = "https://example.com/" + "a" * 600
+    r = client.post("/projects", json={"name": "Long", "repo_url": long_url}, headers=_h(rw_key))
+    assert r.status_code == 422
+
+
+def test_project_normal_https_url_round_trips(client, rw_key):
+    url = "https://github.com/dsec/thing"
+    r = client.post("/projects", json={"name": "GH", "repo_url": url}, headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["repo_url"] == url
+
+
+def test_project_blank_url_normalises_to_null(client, rw_key):
+    # Echoing an empty field back must not 422 — it clears the field.
+    r = client.post("/projects", json={"name": "Blank", "repo_url": "  "}, headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["repo_url"] is None
+
+
+def test_project_bare_host_url_gets_https_prefix(client, rw_key):
+    # A schemeless host (as older rows / hub writes hold) is normalised, not rejected.
+    r = client.post("/projects", json={"name": "Bare", "repo_url": "github.com/dsec/x"},
+                    headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["repo_url"] == "https://github.com/dsec/x"
+    # ...and a PATCH echoing that bare host still succeeds.
+    pid = r.json()["id"]
+    assert client.patch(f"/projects/{pid}", json={"repo_url": "github.com/dsec/x"},
+                        headers=_h(rw_key)).status_code == 200
+
+
+def test_project_explicit_slug_is_slugified(client, rw_key):
+    r = client.post("/projects", json={"name": "X", "slug": "My Cool Project!"}, headers=_h(rw_key))
+    assert r.status_code == 201
+    assert r.json()["slug"] == "my-cool-project"
+
+
+def test_project_duplicate_explicit_slug_is_422_not_500(client, rw_key):
+    client.post("/projects", json={"name": "One", "slug": "showcase"}, headers=_h(rw_key))
+    r = client.post("/projects", json={"name": "Two", "slug": "showcase"}, headers=_h(rw_key))
+    assert r.status_code == 422
+    assert "showcase" in r.text and "in use" in r.text
+
+
+def test_project_explicit_overlong_slug_is_422_not_500(client, rw_key):
+    # A 300-char normalised slug would overflow the VARCHAR(256) and 500 on commit.
+    r = client.post("/projects", json={"name": "Big", "slug": "a" * 300}, headers=_h(rw_key))
+    assert r.status_code == 422
+    assert "256" in r.text
+
+
+def test_project_auto_slug_from_long_name_is_bounded(client, rw_key):
+    r = client.post("/projects", json={"name": "z" * 400}, headers=_h(rw_key))
+    assert r.status_code == 201
+    slug = r.json()["slug"]
+    assert 0 < len(slug) <= 256
+    # A second one collides on the truncated base and still fits with its suffix.
+    r2 = client.post("/projects", json={"name": "z" * 400}, headers=_h(rw_key))
+    assert r2.status_code == 201
+    assert len(r2.json()["slug"]) <= 256 and r2.json()["slug"] != slug
+
+
+def test_project_patch_slug_collision_and_self(client, rw_key):
+    a = client.post("/projects", json={"name": "A", "slug": "alpha"}, headers=_h(rw_key)).json()
+    b = client.post("/projects", json={"name": "B", "slug": "beta"}, headers=_h(rw_key)).json()
+    # Colliding explicit slug on PATCH → 422.
+    assert client.patch(f"/projects/{b['id']}", json={"slug": "alpha"},
+                        headers=_h(rw_key)).status_code == 422
+    # Setting a project's slug to its own current value still works (no broken URL).
+    r = client.patch(f"/projects/{a['id']}", json={"slug": "alpha"}, headers=_h(rw_key))
+    assert r.status_code == 200 and r.json()["slug"] == "alpha"
 
 
 # --- tasks (board + cards + move) ------------------------------------------

@@ -70,16 +70,26 @@ def document_page_preview_link(
     document_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read:documents")),
+    key: APIKey = Depends(require_api_key("write:documents")),
 ) -> dict:
     """Mint an unguessable, time-limited link to preview this document as a page
     on the public site (published OR draft) — the dashboard's "Preview page"
     button. The token is stateless (an HMAC; see ``website.preview``) so there is
-    nothing to store or revoke — it simply expires."""
+    nothing to store or revoke — it simply expires.
+
+    Requires the write scope and only mints for a Page document: the link makes a
+    document renderable by an unauthenticated stranger, so turning a read grant
+    into that delegation, or minting one for a private MeetingNotes/SponsorDoc,
+    would leak metadata (title, nav label, cover, and any content_json body)."""
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.get_document(db, document_id)
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    if (doc.type or "") != "Page":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "only a Page document can be previewed as a page",
+        )
     token = make_page_preview_token(doc.id)
     return {"token": token, "path": f"/pages/preview/{token}"}
 

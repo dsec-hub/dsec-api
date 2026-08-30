@@ -6,14 +6,14 @@ Strict order:
 2. Spam gate (no LLM). Junk / no-reply -> ignore immediately. Cost guard.
 3. Global LLM cap (real Gmail path only). Counts one unit of today's LLM budget
    BEFORE any model call; degrades to ignore if the cap is already reached.
-4. Classify with the cheap model: needs-meeting / simple-reply / fyi-no-reply.
-   `fyi-no-reply` -> ignore.
+4. Classify: needs-meeting / simple-reply / fyi-no-reply. `fyi-no-reply` -> ignore.
+   (One model does both this and the draft step — see app/core/llm.py.)
 5. Decision-maker (OPTIONAL, ships dark — see EMAIL_DECISION_MAKER_ENABLED). Reads
    the email against a compact snapshot of open events and proposes ONE structured
    action (update_dusa_status). Applied only when enabled, not dry-run, and the
    deterministic event match clears the confidence threshold; otherwise logged +
    flagged for a human. Never mutates more than one event per email.
-6. Draft with the draft model. `needs-meeting` appends CALCOM_LINK.
+6. Draft the reply. `needs-meeting` appends CALCOM_LINK.
 7. Log the outcome regardless of action.
 
 Failure rule: any error in classify/decide/draft is logged and downgraded to

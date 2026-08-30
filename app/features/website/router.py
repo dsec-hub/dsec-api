@@ -357,7 +357,10 @@ def _public_event(
     # revealed flagship — exposes everything as normal.
     flagship = bool(getattr(e, "is_flagship", False))
     state = (e.flagship_state or "teaser") if flagship else None
-    if flagship and state == "teaser":
+    # Fail CLOSED: anything that is not exactly "revealed" is treated as still
+    # secret. A typo, a stray capital or a value from some future state must
+    # never publish the specifics.
+    if flagship and state != "revealed":
         description = None
         venue = None
         ticket_url = None
@@ -697,9 +700,9 @@ def public_scan(request: Request, db: Session = Depends(get_db)) -> PublicScanWa
 # ---------------------------------------------------------------------------
 
 
-def _page_summary(doc: Document) -> PublicPageSummary:
+def _page_summary(doc: Document, *, slug_override: str | None = None) -> PublicPageSummary:
     return PublicPageSummary(
-        slug=doc.slug or "",
+        slug=slug_override or doc.slug or "",
         title=doc.title,
         nav_label=doc.nav_label,
         show_in_nav=bool(doc.show_in_nav),
@@ -711,9 +714,9 @@ def _page_summary(doc: Document) -> PublicPageSummary:
     )
 
 
-def _public_page(doc: Document) -> PublicPage:
+def _public_page(doc: Document, *, slug_override: str | None = None) -> PublicPage:
     return PublicPage(
-        **_page_summary(doc).model_dump(),
+        **_page_summary(doc, slug_override=slug_override).model_dump(),
         blocks=sanitize_blocks(doc.content_json),
     )
 
@@ -748,14 +751,19 @@ def public_page_preview(
     if document_id is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")
     doc = db.execute(
-        select(Document).where(Document.id == document_id, Document.archived.is_(False))
+        select(Document).where(
+            Document.id == document_id,
+            Document.archived.is_(False),
+            Document.type == "Page",
+        )
     ).scalar_one_or_none()
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")
     # A preview synthesises a slug for the layout when the draft has none yet.
-    if not doc.slug:
-        doc.slug = f"preview-{doc.id}"
-    return _public_page(doc)
+    # NEVER assign it onto `doc` — this is an unauthenticated GET on a
+    # session-managed row, and any commit added later in the request would
+    # persist it (unique index; no RESERVED_SLUGS validation in this path).
+    return _public_page(doc, slug_override=doc.slug or f"preview-{doc.id}")
 
 
 @router.get("/pages/{slug}", response_model=PublicPage)

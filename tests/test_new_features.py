@@ -31,7 +31,14 @@ def _make_key(db, scopes, name="k"):
 
 @pytest.fixture
 def rw_key(db):
-    return _make_key(db, ["read", "write"], "rw")
+    # A full committee key. Since SEC-05, blanket read/write no longer reaches the
+    # isolated finance/sponsors modules, so a key exercising those routes must hold
+    # their per-module scopes explicitly.
+    return _make_key(
+        db,
+        ["read", "write", "read:sponsors", "write:sponsors", "read:finance", "write:finance"],
+        "rw",
+    )
 
 
 @pytest.fixture
@@ -231,6 +238,66 @@ def test_sponsor_contacts(client, rw_key):
 
 
 # --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-06: nested mutations are scoped to the parent in their own URL
+# --------------------------------------------------------------------------- #
+
+def test_update_speaker_scoped_to_event_in_url(client, rw_key, db):
+    a = client.post("/events-api", json={"name": "A", "start_date": "2099-01-01"}, headers=_h(rw_key)).json()
+    b = client.post("/events-api", json={"name": "B", "start_date": "2099-02-01"}, headers=_h(rw_key)).json()
+    sp = client.post(f"/events-api/{a['id']}/speakers", json={"name": "Ada"}, headers=_h(rw_key)).json()
+    # Editing the speaker under event B (wrong parent) must 404 and change nothing.
+    r = client.patch(f"/events-api/{b['id']}/speakers/{sp['id']}",
+                     json={"name": "Hacked"}, headers=_h(rw_key))
+    assert r.status_code == 404
+    row = db.get(models.EventSpeaker, sp["id"])
+    assert row.name == "Ada"
+    # A non-existent parent 404s "event not found".
+    r2 = client.patch(f"/events-api/999999/speakers/{sp['id']}",
+                      json={"name": "X"}, headers=_h(rw_key))
+    assert r2.status_code == 404 and "event not found" in r2.text
+    # The correct URL still works.
+    assert client.patch(f"/events-api/{a['id']}/speakers/{sp['id']}",
+                        json={"name": "Ada L."}, headers=_h(rw_key)).json()["name"] == "Ada L."
+
+
+def test_remove_speaker_scoped_to_event_in_url(client, rw_key, db):
+    a = client.post("/events-api", json={"name": "A", "start_date": "2099-01-01"}, headers=_h(rw_key)).json()
+    b = client.post("/events-api", json={"name": "B", "start_date": "2099-02-01"}, headers=_h(rw_key)).json()
+    sp = client.post(f"/events-api/{a['id']}/speakers", json={"name": "Ada"}, headers=_h(rw_key)).json()
+    r = client.delete(f"/events-api/{b['id']}/speakers/{sp['id']}", headers=_h(rw_key))
+    assert r.status_code == 404
+    db.expire_all()
+    assert db.get(models.EventSpeaker, sp["id"]).archived is False  # soft-delete didn't fire
+    # correct URL archives it
+    assert client.delete(f"/events-api/{a['id']}/speakers/{sp['id']}", headers=_h(rw_key)).status_code == 204
+
+
+def test_update_contact_scoped_to_sponsor_in_url(client, rw_key, db):
+    a = client.post("/sponsors", json={"organisation": "A"}, headers=_h(rw_key)).json()
+    b = client.post("/sponsors", json={"organisation": "B"}, headers=_h(rw_key)).json()
+    c = client.post(f"/sponsors/{a['id']}/contacts", json={"name": "Hank"}, headers=_h(rw_key)).json()
+    r = client.patch(f"/sponsors/{b['id']}/contacts/{c['id']}",
+                     json={"email": "x@y.com"}, headers=_h(rw_key))
+    assert r.status_code == 404
+    row = db.get(models.SponsorContact, c["id"])
+    assert row.email is None
+    r2 = client.patch(f"/sponsors/999999/contacts/{c['id']}",
+                      json={"email": "z@y.com"}, headers=_h(rw_key))
+    assert r2.status_code == 404 and "sponsor not found" in r2.text
+
+
+def test_remove_contact_scoped_to_sponsor_in_url(client, rw_key, db):
+    a = client.post("/sponsors", json={"organisation": "A"}, headers=_h(rw_key)).json()
+    b = client.post("/sponsors", json={"organisation": "B"}, headers=_h(rw_key)).json()
+    c = client.post(f"/sponsors/{a['id']}/contacts", json={"name": "Hank"}, headers=_h(rw_key)).json()
+    r = client.delete(f"/sponsors/{b['id']}/contacts/{c['id']}", headers=_h(rw_key))
+    assert r.status_code == 404
+    db.expire_all()
+    assert db.get(models.SponsorContact, c["id"]).archived is False
+    assert client.delete(f"/sponsors/{a['id']}/contacts/{c['id']}", headers=_h(rw_key)).status_code == 204
+
+
+# --------------------------------------------------------------------------- #
 # Self-service key mint
 # --------------------------------------------------------------------------- #
 
@@ -269,6 +336,36 @@ def test_self_mint_enforces_subset(client, db):
     # unauthenticated -> 401
     assert client.post("/admin/keys/self",
                        json={"name": "x", "scopes": ["read"], "owner": "appuser:1"}).status_code == 401
+
+
+# SEC-05 minting bootstrap: after isolating finance/sponsors, the owner must still
+# have a way to mint the per-module replacement keys. It is the basic-auth owner
+# endpoint (POST /admin/keys), which has no scope-algebra restriction — so the
+# bootstrap trap Codex worried about does not exist.
+_ADMIN_BASIC = ("admin", "test-dashboard-pass")  # conftest DASHBOARD_USER / _PASS
+
+
+def test_owner_basic_auth_can_mint_isolated_scope_keys(client, db):
+    r = client.post(
+        "/admin/keys",
+        json={"name": "treasurer", "scopes": ["read:finance", "write:sponsors"]},
+        auth=_ADMIN_BASIC,
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["scopes"]) == ["read:finance", "write:sponsors"]
+
+
+def test_self_mint_legacy_caller_cannot_escalate_into_isolated_modules(client, db):
+    """SEC-05 boundary: a legacy read/write service key can NOT mint a
+    finance/sponsors key through /keys/self (no coarse→isolated bypass). The
+    owner uses the basic-auth path above to bootstrap those instead."""
+    legacy = _make_key(db, ["read", "write"], "legacy-svc")
+    r = client.post(
+        "/admin/keys/self",
+        json={"name": "esc", "scopes": ["write:sponsors"], "owner": "appuser:9"},
+        headers=_h(legacy),
+    )
+    assert r.status_code == 403
 
 
 # --------------------------------------------------------------------------- #
@@ -325,7 +422,8 @@ def test_mcp_event_connections(db):
 
 
 def test_mcp_sponsor_packages_and_contacts(db):
-    with as_key(["read", "write"]):
+    # SEC-05: sponsor tools need the per-module scope; blanket write no longer covers it.
+    with as_key(["read", "write", "read:sponsors", "write:sponsors"]):
         pkg = mcpserver.create_sponsor_package(name="Headline", price="from $1000",
                                                includes=["Logo", "Booth"])
         assert pkg["name"] == "Headline"
@@ -434,6 +532,100 @@ def test_flagship_signup_requires_flagship_event(client, rw_key):
     slug = next(e["slug"] for e in feed if e["title"] == "Plain Meetup")
     assert client.post(f"/website/flagship/{slug}/signup",
                        json={"kind": "notify", "email": "x@y.com"}).status_code == 404
+
+
+def test_sponsor_lead_rejects_overlong_company(client):
+    """COL-API-03: an over-length value is a 422 naming the field, not a 500.
+
+    (SQLite ignores VARCHAR widths, so this proves the new Pydantic validation
+    rather than reproducing the old Postgres StringDataRightTruncation 500.)
+    """
+    r = client.post("/sponsor-leads", json={
+        "source": "enquiry", "email": "a@b.com", "company": "x" * 300,
+    })
+    assert r.status_code == 422
+    assert "company" in r.text
+
+
+def test_flagship_signup_rejects_overlong_company(client):
+    """COL-API-03: body validation fires before the slug lookup, so an
+    over-length company is a 422 naming the field, not a 500."""
+    r = client.post("/website/flagship/any-slug/signup", json={
+        "kind": "sponsor", "email": "a@b.com", "company": "x" * 300,
+    })
+    assert r.status_code == 422
+    assert "company" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-05: flagship redaction fails closed + constrained flagship_state
+# --------------------------------------------------------------------------- #
+
+def _make_flagship(client, db, rw_key, name, bad_state):
+    """Create a published flagship event, then set an out-of-range flagship_state
+    directly through the ORM (the API schema would now reject it — which is the
+    point: that is how a bad value arrives from dsec-hub's own Drizzle schema)."""
+    ev = client.post("/events-api", json={
+        "name": name, "start_date": "2099-12-01", "is_public": True,
+        "is_flagship": True, "flagship_theme": "nightrun", "flagship_state": "teaser",
+        "description": "TOP SECRET", "venue": "The Bunker",
+        "ticket_url": "https://t.example/x",
+    }, headers=_h(rw_key)).json()
+    row = db.get(models.Event, ev["id"])
+    row.flagship_state = bad_state
+    db.commit()
+    feed = client.get("/website/events").json()
+    slug = next(e["slug"] for e in feed if e["title"] == name)
+    return client.get(f"/website/events/{slug}").json()
+
+
+def test_flagship_capital_teaser_is_redacted(client, db, rw_key):
+    page = _make_flagship(client, db, rw_key, "Duckshot Cap", "Teaser")
+    assert page["description"] is None
+    assert page["venue"] is None
+    assert page["ticket_url"] is None
+
+
+def test_flagship_unknown_state_is_redacted(client, db, rw_key):
+    page = _make_flagship(client, db, rw_key, "Duckshot Draft", "draft")
+    assert page["description"] is None
+    assert page["venue"] is None
+    assert page["ticket_url"] is None
+
+
+def test_patch_event_rejects_bad_flagship_state(client, db, rw_key):
+    eid = client.post("/events-api", json={"name": "E", "start_date": "2099-12-01"},
+                      headers=_h(rw_key)).json()["id"]
+    assert client.patch(f"/events-api/{eid}", json={"flagship_state": "Teaser"},
+                        headers=_h(rw_key)).status_code == 422
+
+
+def test_patch_event_rejects_bad_flagship_theme(client, db, rw_key):
+    eid = client.post("/events-api", json={"name": "E2", "start_date": "2099-12-01"},
+                      headers=_h(rw_key)).json()["id"]
+    assert client.patch(f"/events-api/{eid}", json={"flagship_theme": "nonsense"},
+                        headers=_h(rw_key)).status_code == 422
+
+
+def test_mcp_event_tools_constrain_flagship_fields():
+    """The create/update event tool signatures accept only the legal values."""
+    import inspect
+    from typing import Literal, get_args, get_origin
+    from app.features.mcp import server as mcpserver
+
+    def _literal_values(annotation):
+        # `X | None` under `from __future__ import annotations` → resolved via
+        # eval_str; pick the Literal arm and return its values.
+        for arm in get_args(annotation):
+            if get_origin(arm) is Literal:
+                return set(get_args(arm))
+        return set()
+
+    for tool in (mcpserver.create_event, mcpserver.update_event):
+        # eval_str resolves the PEP 563 string annotations to real types.
+        params = inspect.signature(tool, eval_str=True).parameters
+        assert _literal_values(params["flagship_state"].annotation) == {"teaser", "revealed"}
+        assert _literal_values(params["flagship_theme"].annotation) == {"arena", "blueprint", "nightrun"}
 
 
 # --------------------------------------------------------------------------- #

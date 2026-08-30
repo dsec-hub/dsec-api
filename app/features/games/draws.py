@@ -10,12 +10,34 @@ draw counts only member plays (`is_member_play`).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.logging import log_event
 from app.models import DrawCycle, GameAttempt, GamePlayer
+
+_PERIOD_KEY_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def is_valid_period_key(period_key: str) -> bool:
+    """True for a well-formed YYYY-MM key with a real month (01-12) whose UTC
+    month bounds are actually constructible.
+
+    The regex alone accepts extremes like ``0000-01`` and ``9999-12`` that then
+    blow up in ``month_bounds`` (``datetime(0, …)`` / ``datetime(10000, …)`` are
+    out of range) — and in ``get_draw`` that raise lands AFTER a DrawCycle row is
+    committed, leaving a junk row and a 500. Range-checking here lets both routes
+    reject with a 422 before any DB write."""
+    if not _PERIOD_KEY_RE.match(period_key or ""):
+        return False
+    try:
+        month_bounds(period_key)
+    except (ValueError, OverflowError):
+        return False
+    return True
 
 
 def _utcnow() -> datetime:
@@ -113,14 +135,31 @@ def roll_up_cycle(db: Session, period_key: str) -> dict:
     return {"period_key": period_key, "winner": winner, "standings": ranked}
 
 
-def close_cycle(db: Session, period_key: str) -> DrawCycle:
+def close_cycle(db: Session, period_key: str, *, force: bool = False) -> DrawCycle:
     """Pick the winner (highest member points), mark closed, open the next cycle.
 
-    Idempotent: a cycle already closed is returned unchanged.
+    Idempotent: a cycle already closed is returned unchanged. Refuses (ValueError)
+    to close a period that has not finished yet unless ``force`` is set — closing
+    a live month would award the real gift card on a partial roll-up and there is
+    no reopen path. The clock is checked BEFORE any row is created, so a refused
+    close leaves nothing behind.
     """
+    # Already-closed cycles return unchanged (idempotent) — including one that was
+    # force-closed early and is later re-run by the monthly cron.
+    existing = db.execute(
+        select(DrawCycle).where(DrawCycle.period_key == period_key)
+    ).scalars().first()
+    if existing is not None and existing.status == "closed":
+        return existing
+
+    _, end = month_bounds(period_key)
+    if not force and _utcnow() < end:
+        raise ValueError(
+            f"period {period_key} has not ended yet (ends {end.date().isoformat()}); "
+            "pass force=true to close it early"
+        )
+
     cycle = get_or_create_open_cycle(db, period_key)
-    if cycle.status == "closed":
-        return cycle
     rolled = roll_up_cycle(db, period_key)
     winner = rolled["winner"]
     cycle.status = "closed"
@@ -136,4 +175,9 @@ def close_cycle(db: Session, period_key: str) -> DrawCycle:
     year, month = (int(p) for p in period_key.split("-"))
     nxt = f"{year + 1}-01" if month == 12 else f"{year}-{month + 1:02d}"
     get_or_create_open_cycle(db, nxt)
+    # Audit the close so a disputed draw can be reconstructed.
+    log_event(
+        db, source="games", action="draw_closed", external_id=cycle.period_key,
+        payload={"winner_player_id": cycle.winner_player_id, "forced": force},
+    )
     return cycle

@@ -118,9 +118,46 @@ def get_document(db: Session, document_id: int) -> Document | None:
     return db.get(Document, document_id)
 
 
+def _enforce_page_type(data: dict) -> None:
+    """A document with a public slug IS a page. Keep ``type`` in lock-step so the
+    page preview (which requires ``type == "Page"``) and the public /website/pages
+    feed (which serves by slug + is_public) can never disagree — the gap that let
+    a slug-published, type-less document be served yet un-previewable. Defaults a
+    missing type to "Page"; rejects a contradictory explicit non-Page type.
+    """
+    if data.get("slug"):
+        t = data.get("type")
+        if not t:
+            data["type"] = "Page"
+        elif t != "Page":
+            raise ValueError("a document with a slug must have type 'Page'")
+
+
+def backfill_page_document_type(db: Session) -> int:
+    """Idempotent: set ``type = 'Page'`` on every page-shaped row (has a slug) that
+    predates the type invariant (``type`` NULL or blank). Returns rows updated.
+
+    Applied on deploy by the Alembic backfill migration; exposed here so the logic
+    is unit-testable against SQLite (the migration chain is never replayed there).
+    """
+    from sqlalchemy import or_, update
+
+    result = db.execute(
+        update(Document)
+        .where(
+            Document.slug.is_not(None),
+            or_(Document.type.is_(None), Document.type == ""),
+        )
+        .values(type="Page")
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
 def create_document(db: Session, data: dict) -> Document:
     if data.get("slug"):  # an explicitly-chosen page slug — normalise + guard
         data["slug"] = validate_slug(db, data["slug"])
+    _enforce_page_type(data)
     doc = Document(**data)
     db.add(doc)
     db.commit()
@@ -134,6 +171,7 @@ def update_document(db: Session, document_id: int, data: dict) -> Document | Non
         return None
     if data.get("slug"):  # changing the page slug — normalise + guard
         data["slug"] = validate_slug(db, data["slug"], exclude_id=document_id)
+    _enforce_page_type(data)
     for key, value in data.items():
         setattr(doc, key, value)
     db.commit()

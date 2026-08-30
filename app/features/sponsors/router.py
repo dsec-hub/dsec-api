@@ -162,7 +162,10 @@ def update_contact(
     key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> SponsorContactOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    contact = contacts.update_contact(db, contact_id, body.model_dump(exclude_unset=True))
+    _require_sponsor(db, sponsor_id)
+    contact = contacts.update_contact(
+        db, contact_id, body.model_dump(exclude_unset=True), sponsor_id=sponsor_id
+    )
     if contact is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "contact not found")
     return SponsorContactOut.model_validate(contact)
@@ -177,5 +180,6 @@ def remove_contact(
     key: APIKey = Depends(require_api_key("write:sponsors")),
 ) -> None:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
-    if contacts.remove_contact(db, contact_id) is None:
+    _require_sponsor(db, sponsor_id)
+    if contacts.remove_contact(db, contact_id, sponsor_id=sponsor_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "contact not found")

@@ -13,6 +13,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core.clock import local_date, today_local
 from app.models import (
     DusaImport,
     FinanceReport,
@@ -72,7 +73,10 @@ def handle_dusa_upload(
     if existing is not None and existing.status == "ok":
         raise DuplicateImport(existing)
 
-    report_date = received_at.date() if received_at else date.today()
+    # The date a committee member reads as "as of ..." must be the club's local
+    # (Melbourne) calendar day, not the server's UTC day — a Friday-morning report
+    # arriving before 10/11am Melbourne would otherwise be filed under Thursday.
+    report_date = local_date(received_at) if received_at else today_local()
 
     # --- Parse first; record a failed import (its own commit) if it blows up ---
     try:

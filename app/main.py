@@ -191,12 +191,18 @@ def _register_request_size_limit(app: FastAPI) -> None:
     handler, which still applies its own limits.
     """
     # Prefixes whose handlers accept large/streamed bodies and self-limit.
+    # Matched on whole path segments: "/mcp" exempts /mcp and /mcp/..., but NOT
+    # /mcp-setup. A bare startswith() would exempt any future route whose path
+    # merely begins with one of these strings, silently and with no review signal.
     exempt = ("/media", "/attachments", "/ingest", "/mcp")
     max_bytes = settings.MAX_REQUEST_BYTES
 
+    def _is_exempt(path: str) -> bool:
+        return any(path == p or path.startswith(p + "/") for p in exempt)
+
     @app.middleware("http")
     async def _limit_request_size(request: Request, call_next):
-        if not request.url.path.startswith(exempt):
+        if not _is_exempt(request.url.path):
             content_length = request.headers.get("content-length")
             if content_length is not None:
                 try:

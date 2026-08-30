@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.core.urls import validate_public_url
 
 
 class ProjectBase(BaseModel):
@@ -30,6 +32,19 @@ class ProjectBase(BaseModel):
     # Additional owners beyond `lead_id` (the primary lead). Full replace on PATCH;
     # omit to leave unchanged, [] to clear. The primary is never duplicated here.
     co_owner_ids: list[int] | None = None
+
+    @field_validator("repo_url", "demo_url", "image_url")
+    @classmethod
+    def _validate_urls(cls, v: str | None) -> str | None:
+        # These reach the public showcase's href/src — http(s) only (a repo/demo/
+        # image link is never mailto:/tel:/relative). max_length matches the
+        # String(512) columns, so an over-length value is a 422, not a DB error.
+        # These fields echo user-stored records: a blank clears the field, and a
+        # bare host (github.com/x) is normalised to https:// rather than rejected,
+        # so re-submitting an existing value on an unrelated PATCH can't 422.
+        return validate_public_url(v, max_length=512, allow_relative=False,
+                                   schemes=("https", "http"),
+                                   blank_to_none=True, coerce_scheme="https")
 
 
 class ProjectCreate(ProjectBase):
