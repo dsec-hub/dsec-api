@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -345,6 +346,24 @@ def verify_access_token(raw: str, db: Session) -> OAuthToken | None:
     if not hmac.compare_digest(row.access_token_hash, sha256_hex(raw)):
         return None
     if _aware(row.access_expires_at) <= now():
+        return None
+    # SEC-07a: re-check the account on EVERY token use, not just at first login.
+    # Deactivating a committee member in the hub must kill their live connector
+    # immediately — otherwise the 60-day access/refresh chain keeps working for
+    # someone who left. app_user is part of dsec-api's OWN Alembic chain, so the
+    # table exists in every real deploy and in the SQLite test DB.
+    #
+    # FAIL CLOSED on error: this is an auth check. If the app_user row cannot be
+    # read (a genuinely broken/degraded DB), deny rather than allow. This is the
+    # DELIBERATE OPPOSITE of the fail-OPEN fallback in users._role_perms /
+    # allowed_scopes_for, which trades safety for availability on a non-auth path;
+    # re-using that fail-open behaviour for an auth decision would be the bug.
+    try:
+        user = db.get(AppUser, row.user_id)
+    except SQLAlchemyError:
+        db.rollback()  # clear the aborted transaction before the caller reuses it
+        return None
+    if user is None or not user.is_active:
         return None
     return row
 

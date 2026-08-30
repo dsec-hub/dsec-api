@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -71,6 +71,23 @@ SCOPE_ISOLATED_MODULES = ("finance", "sponsors")
 
 # Length of the human-facing prefix used for DB lookup, e.g. "dsec_live_a1b2c3d4".
 _PREFIX_RANDOM_LEN = 8
+
+# Default lifetime stamped on a NEWLY minted key (SEC-07c). Pre-existing keys keep
+# NULL (never expires); only new keys carry this, so the enforcement in verify_key
+# cannot retroactively kill the old shared service keys.
+DEFAULT_KEY_TTL_DAYS = 180
+
+
+def default_key_expiry() -> datetime:
+    """`expires_at` for a freshly minted key: 180 days out. Callers that mint a
+    key set this; existing rows stay NULL (see the expires_at migration)."""
+    return datetime.now(timezone.utc) + timedelta(days=DEFAULT_KEY_TTL_DAYS)
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite hands back naive datetimes for DateTime(timezone=True); treat a
+    naive value as UTC so expiry comparisons never raise naive-vs-aware."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def _module_of(required: str) -> str | None:
@@ -150,6 +167,11 @@ def verify_key(raw_key: str, db: Session) -> APIKey | None:
     prefix = _prefix_of(raw_key)
     row = db.execute(select(APIKey).where(APIKey.prefix == prefix)).scalar_one_or_none()
     if row is None or row.revoked:
+        return None
+    # SEC-07c: a NULL expiry means "never expires" (all pre-existing keys, incl.
+    # the shared service keys, are NULL). A key with a set expiry stops working
+    # once it passes; new keys default to 180 days (see default_key_expiry).
+    if row.expires_at is not None and _aware(row.expires_at) <= datetime.now(timezone.utc):
         return None
     try:
         _hasher.verify(row.key_hash, raw_key)

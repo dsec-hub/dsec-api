@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.net import client_ip
@@ -25,6 +26,7 @@ from app.db import get_db
 from app.features.oauth import metadata, pages
 from app.features.oauth import service, users
 from app.features.oauth.service import SUPPORTED_SCOPES
+from app.models import AppUser
 
 router = APIRouter()
 
@@ -146,6 +148,27 @@ def _register_error(error: str, desc: str) -> JSONResponse:
 # --------------------------------------------------------------------------- #
 # Authorization endpoint (login + consent)
 # --------------------------------------------------------------------------- #
+
+def _coarse_grant(scopes: list[str]) -> set[str]:
+    """Reconstruct the coarse OAuth grant (read/write/trigger/ingest) that an
+    already-expanded, stored scope list implies, so it can be re-expanded against
+    the user's LIVE role on refresh (SEC-07b).
+
+    A per-module ``read:X``/``write:X`` implies the coarse ``read``/``write`` the
+    user consented to, even when the expanded grant dropped the bare coarse token
+    (an enforced-module-only grant carries only ``read:finance`` etc.).
+    """
+    coarse: set[str] = set()
+    if "read" in scopes or any(s.startswith("read:") for s in scopes):
+        coarse.add("read")
+    if "write" in scopes or any(s.startswith("write:") for s in scopes):
+        coarse.add("write")
+    if "trigger" in scopes:
+        coarse.add("trigger")
+    if "ingest" in scopes:
+        coarse.add("ingest")
+    return coarse
+
 
 def _norm_scopes(raw_scope: str | None, client_scope: str | None) -> list[str]:
     allowed = set(client_scope.split()) if client_scope else set(SUPPORTED_SCOPES)
@@ -370,11 +393,37 @@ async def token(request: Request, db: Session = Depends(get_db)):
         if not res.ok or res.token is None:
             return _token_error(res.error or "invalid_grant", 400)
         old = res.token
-        scope = old.scope
+        original = old.scope.split()
+        # SEC-07b: re-derive scopes from the user's LIVE role on every refresh,
+        # then intersect with the original grant. A role that has SHRUNK yields a
+        # narrower token; a role that has GROWN gains nothing it wasn't first
+        # granted. Previously the scope string was copied verbatim across refresh,
+        # so a connector authorised in March kept March's permissions in December.
+        try:
+            user = db.get(AppUser, old.user_id)
+        except SQLAlchemyError:
+            db.rollback()
+            user = None
+        if user is not None and not user.is_active:
+            # Deactivated account → kill the whole refresh chain, don't re-issue.
+            service.revoke_family(db, client_id=old.client_id, user_id=old.user_id)
+            return _token_error("invalid_grant", 400, "account is inactive")
+        if user is not None:
+            rederived = set(service.scopes_for_grant(db, user, _coarse_grant(original)))
+            scope_tokens = [s for s in original if s in rederived]  # narrow only
+        else:
+            # Can't read the role (degraded DB) → keep the frozen grant; the access
+            # token is still re-checked against app_user on every use (SEC-07a).
+            scope_tokens = list(original)
         req_scope = str(form.get("scope") or "").split()
-        if req_scope:  # refresh may only narrow scope, never widen it
-            narrowed = [s for s in old.scope.split() if s in req_scope]
-            scope = " ".join(narrowed) if narrowed else old.scope
+        if req_scope:  # a client may narrow further, never widen
+            narrowed = [s for s in scope_tokens if s in req_scope]
+            if narrowed:
+                scope_tokens = narrowed
+        scope = " ".join(scope_tokens)
+        if not scope:
+            # The live role no longer grants any of the originally-consented scopes.
+            return _token_error("invalid_grant", 400, "the account no longer holds any granted scope")
         old.revoked = True  # rotation: the presented refresh token is now spent
         db.commit()
         tokens = service.issue_tokens(

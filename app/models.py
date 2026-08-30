@@ -83,6 +83,14 @@ class APIKey(Base):
         DateTime(timezone=True), nullable=True
     )
     revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # NULL = never expires. Every PRE-EXISTING row (including dsec-app's and
+    # dsec-hub's shared service keys) was backfilled to NULL by migration
+    # d8b3f6a1c4e7, so adding expiry enforcement cannot kill them; only NEWLY
+    # minted keys get a default 180-day expiry (see core.apikeys.default_key_expiry
+    # / admin.self_create_key). Enforced in core.apikeys.verify_key (SEC-07c).
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class RateLimit(Base):

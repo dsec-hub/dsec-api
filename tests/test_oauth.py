@@ -451,6 +451,72 @@ def test_revoke_unknown_token_is_ok(client):
 # scope bounding by role (fallback mapping; admin keeps ingest)
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# SEC-07(a): the access token is re-checked against the live account
+# --------------------------------------------------------------------------- #
+
+def test_access_token_rejected_after_user_deactivated(client, db, user):
+    """Deactivating a user in the hub must invalidate their live access token on
+    the very next check — not only at the 60-day refresh boundary."""
+    _, tok = _issue(client, user)
+    assert service.verify_access_token(tok["access_token"], db) is not None
+    user.is_active = False
+    db.commit()
+    assert service.verify_access_token(tok["access_token"], db) is None
+
+
+def test_access_token_rejected_when_user_row_missing(client, db, user):
+    """Fail CLOSED: if the app_user row can't be resolved, the token is denied."""
+    _, tok = _issue(client, user)
+    db.delete(user)
+    db.commit()
+    assert service.verify_access_token(tok["access_token"], db) is None
+
+
+def test_refresh_denied_for_deactivated_user(client, db, user):
+    """A deactivated account can't refresh — the whole chain is killed."""
+    cid, tok = _issue(client, user)
+    user.is_active = False
+    db.commit()
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+
+
+# --------------------------------------------------------------------------- #
+# SEC-07(b): refresh re-derives scopes from the live role (narrow-only)
+# --------------------------------------------------------------------------- #
+
+def test_refresh_narrows_scope_when_role_shrinks(client, user, monkeypatch):
+    """A role that shrank since issuance yields a NARROWER token on refresh."""
+    cid, tok = _issue(client, user)  # exec fallback → read write trigger
+    # Simulate the live role now granting read-only.
+    monkeypatch.setattr(service, "scopes_for_grant", lambda db, u, coarse: ["read"])
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 200, r.text
+    assert set(r.json()["scope"].split()) == {"read"}  # lost write + trigger
+
+
+def test_refresh_never_widens_beyond_original_grant(client, user, monkeypatch):
+    """Even if the live role now grants MORE, refresh can only ever narrow the
+    scopes the user first consented to — it never widens them."""
+    cid, tok = _issue(client, user)  # read write trigger
+    monkeypatch.setattr(
+        service, "scopes_for_grant",
+        lambda db, u, coarse: ["read", "write", "trigger", "ingest", "read:finance"],
+    )
+    r = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid,
+    })
+    assert r.status_code == 200, r.text
+    got = set(r.json()["scope"].split())
+    assert got == {"read", "write", "trigger"}
+    assert "ingest" not in got and "read:finance" not in got
+
+
 def test_admin_role_can_grant_ingest(client, db):
     pw = bcrypt.hashpw(b"adminpass-adminpass", bcrypt.gensalt(rounds=4)).decode()
     db.add(AppUser(email="admin@dsec.club", name="Admin", password_hash=pw, role="admin", is_active=True))

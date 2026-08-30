@@ -17,7 +17,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import require_basic_auth
-from app.core.apikeys import VALID_SCOPES, generate_key, require_api_key
+from app.core.apikeys import (
+    VALID_SCOPES,
+    default_key_expiry,
+    generate_key,
+    require_api_key,
+)
 from app.core.logging import log_event
 from app.core.net import client_ip
 from app.features.archive.service import build_export_bundle
@@ -65,6 +70,9 @@ class KeyInfo(BaseModel):
     created_at: datetime
     last_used_at: datetime | None = None
     revoked: bool
+    # SEC-07c: NULL = never expires (all pre-existing keys); new keys get 180 days.
+    # Surfaced so dsec-hub's Settings -> API list can show the expiry coming.
+    expires_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -88,6 +96,7 @@ def create_key(
         key_hash=gen.key_hash,
         scopes=req.scopes,
         created_by=admin,
+        expires_at=default_key_expiry(),  # SEC-07c: new keys expire in 180 days
     )
     db.add(row)
     db.commit()
@@ -141,6 +150,7 @@ def self_create_key(
         key_hash=gen.key_hash,
         scopes=sorted(requested),
         created_by=req.owner,
+        expires_at=default_key_expiry(),  # SEC-07c: new keys expire in 180 days
     )
     db.add(row)
     db.commit()
