@@ -338,6 +338,36 @@ def test_self_mint_enforces_subset(client, db):
                        json={"name": "x", "scopes": ["read"], "owner": "appuser:1"}).status_code == 401
 
 
+# SEC-05 minting bootstrap: after isolating finance/sponsors, the owner must still
+# have a way to mint the per-module replacement keys. It is the basic-auth owner
+# endpoint (POST /admin/keys), which has no scope-algebra restriction — so the
+# bootstrap trap Codex worried about does not exist.
+_ADMIN_BASIC = ("admin", "test-dashboard-pass")  # conftest DASHBOARD_USER / _PASS
+
+
+def test_owner_basic_auth_can_mint_isolated_scope_keys(client, db):
+    r = client.post(
+        "/admin/keys",
+        json={"name": "treasurer", "scopes": ["read:finance", "write:sponsors"]},
+        auth=_ADMIN_BASIC,
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["scopes"]) == ["read:finance", "write:sponsors"]
+
+
+def test_self_mint_legacy_caller_cannot_escalate_into_isolated_modules(client, db):
+    """SEC-05 boundary: a legacy read/write service key can NOT mint a
+    finance/sponsors key through /keys/self (no coarse→isolated bypass). The
+    owner uses the basic-auth path above to bootstrap those instead."""
+    legacy = _make_key(db, ["read", "write"], "legacy-svc")
+    r = client.post(
+        "/admin/keys/self",
+        json={"name": "esc", "scopes": ["write:sponsors"], "owner": "appuser:9"},
+        headers=_h(legacy),
+    )
+    assert r.status_code == 403
+
+
 # --------------------------------------------------------------------------- #
 # MCP tools (direct calls with the auth contextvar set)
 # --------------------------------------------------------------------------- #
