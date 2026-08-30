@@ -214,6 +214,38 @@ def test_ingest_membership_lands_rows(client, ingest_key, db):
     assert db.query(models.MemberReport).count() == 1
 
 
+def test_report_date_uses_melbourne_day_not_utc_day(client, ingest_key, db):
+    # 2026-06-11 22:00 UTC is 2026-06-12 08:00 in Melbourne (AEST, UTC+10).
+    # The stored report_date must be the 12th, not the 11th.
+    r = client.post(
+        "/ingest/dusa",
+        headers={"Authorization": f"Bearer {ingest_key}"},
+        data={"report_type": "membership", "message_id": "tz-1",
+              "received_at": "2026-06-11T22:00:00Z", "sender": "DUSA", "subject": "weekly"},
+        files={"file": ("r.xlsx", build_membership_xlsx(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert r.status_code == 200, r.text
+    rep = db.query(models.MemberReport).order_by(models.MemberReport.id.desc()).first()
+    assert rep.report_date.isoformat() == "2026-06-12"
+
+
+def test_report_date_handles_daylight_saving_boundary(client, ingest_key, db):
+    # 2026-01-11 14:00 UTC is 2026-01-12 01:00 in Melbourne (AEDT, UTC+11).
+    # ZoneInfo (not a hardcoded offset) is what makes summer time land correctly.
+    r = client.post(
+        "/ingest/dusa",
+        headers={"Authorization": f"Bearer {ingest_key}"},
+        data={"report_type": "membership", "message_id": "tz-2",
+              "received_at": "2026-01-11T14:00:00Z", "sender": "DUSA", "subject": "weekly"},
+        files={"file": ("r.xlsx", build_membership_xlsx(),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert r.status_code == 200, r.text
+    rep = db.query(models.MemberReport).order_by(models.MemberReport.id.desc()).first()
+    assert rep.report_date.isoformat() == "2026-01-12"
+
+
 def test_ingest_membership_marks_dropped_members_not_current(client, ingest_key, db):
     _post(client, ingest_key, report_type="membership", message_id="wk1",
           data=build_membership_xlsx())
