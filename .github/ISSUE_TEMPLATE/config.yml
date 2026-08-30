@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: DSEC Discord
+    url: https://dsec.club/join
+    about: Questions, help, and general discussion happen in the club Discord — not the issue tracker.
