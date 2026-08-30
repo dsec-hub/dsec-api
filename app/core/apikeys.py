@@ -54,8 +54,28 @@ VALID_SCOPES = {
     "read:documents", "write:documents",
 }
 
+# Modules whose per-module scopes are NOT satisfiable by the legacy coarse
+# read/write scopes. The isolation is enforced right here in has_scope, so even a
+# key holding blanket read/write cannot reach finance/sponsors by name — only an
+# explicit read:finance / write:sponsors (etc.) does (SEC-05). Before this, blanket
+# "write" satisfied "write:finance", so an Events Lead's OAuth token (which carries
+# blanket read/write because it also has focus-only modules) could reach Finance.
+#
+# Deliberately NARROWER than oauth.service.ENFORCED_MODULES (which also lists
+# members/people/documents): those are isolated only at OAuth *issuance* — a token
+# scoped to them isn't granted blanket read/write — while a legacy key still
+# reaches them here, so tightening those routes never locked out an already-issued
+# key. oauth.service builds ENFORCED_MODULES from this tuple so finance/sponsors
+# live in exactly one place.
+SCOPE_ISOLATED_MODULES = ("finance", "sponsors")
+
 # Length of the human-facing prefix used for DB lookup, e.g. "dsec_live_a1b2c3d4".
 _PREFIX_RANDOM_LEN = 8
+
+
+def _module_of(required: str) -> str | None:
+    """'write:finance' -> 'finance'; 'write' / 'read' / 'trigger' -> None."""
+    return required.split(":", 1)[1] if ":" in required else None
 
 
 def has_scope(scopes, required: str) -> bool:
@@ -67,9 +87,11 @@ def has_scope(scopes, required: str) -> bool:
     scopes (``read:sponsors``, ``write:games``, …) provide tighter isolation:
 
     - legacy ``"write"`` is a superset of every ``write:*``, every ``read:*`` and
-      legacy ``"read"``.
-    - legacy ``"read"`` is a superset of every ``read:*``.
-    - ``"write:X"`` satisfies ``"read:X"``.
+      legacy ``"read"`` — EXCEPT scopes belonging to a ``SCOPE_ISOLATED_MODULES``
+      module (finance, sponsors), which the coarse scopes never cover.
+    - legacy ``"read"`` is a superset of every ``read:*``, with the same exception.
+    - ``"write:X"`` satisfies ``"read:X"`` (including the isolated modules, so a
+      genuine ``write:finance`` key can read finance).
     - any other scope (``trigger``, ``ingest``, an exact module scope) matches
       only itself.
 
@@ -82,14 +104,18 @@ def has_scope(scopes, required: str) -> bool:
     """
     if required in scopes:
         return True
-    # Legacy "write" — the universal superset of every read/write scope, coarse
-    # or per-module, plus legacy "read".
-    if "write" in scopes and (required == "read" or required.startswith(("read:", "write:"))):
-        return True
-    # Legacy "read" covers every read scope (exact "read" handled above).
-    if "read" in scopes and required.startswith("read:"):
-        return True
-    # write:X implies read:X.
+    # The legacy coarse scopes are a broad superset for the focus-only modules,
+    # but must NEVER cover a scope belonging to a SCOPE_ISOLATED module (SEC-05).
+    if _module_of(required) not in SCOPE_ISOLATED_MODULES:
+        # Legacy "write" — the universal superset of every read/write scope, coarse
+        # or per-module, plus legacy "read".
+        if "write" in scopes and (required == "read" or required.startswith(("read:", "write:"))):
+            return True
+        # Legacy "read" covers every read scope (exact "read" handled above).
+        if "read" in scopes and required.startswith("read:"):
+            return True
+    # write:X implies read:X (kept for isolated modules too — this is what lets a
+    # real write:finance key read finance).
     if required.startswith("read:") and f"write:{required[len('read:'):]}" in scopes:
         return True
     return False

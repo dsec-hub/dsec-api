@@ -31,7 +31,14 @@ def _make_key(db, scopes, name="k"):
 
 @pytest.fixture
 def rw_key(db):
-    return _make_key(db, ["read", "write"], "rw")
+    # A full committee key. Since SEC-05, blanket read/write no longer reaches the
+    # isolated finance/sponsors modules, so a key exercising those routes must hold
+    # their per-module scopes explicitly.
+    return _make_key(
+        db,
+        ["read", "write", "read:sponsors", "write:sponsors", "read:finance", "write:finance"],
+        "rw",
+    )
 
 
 @pytest.fixture
@@ -325,7 +332,8 @@ def test_mcp_event_connections(db):
 
 
 def test_mcp_sponsor_packages_and_contacts(db):
-    with as_key(["read", "write"]):
+    # SEC-05: sponsor tools need the per-module scope; blanket write no longer covers it.
+    with as_key(["read", "write", "read:sponsors", "write:sponsors"]):
         pkg = mcpserver.create_sponsor_package(name="Headline", price="from $1000",
                                                includes=["Logo", "Booth"])
         assert pkg["name"] == "Headline"

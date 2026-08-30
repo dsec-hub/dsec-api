@@ -14,8 +14,13 @@ from app.core.apikeys import generate_key
 @pytest.fixture
 def rw_key(db):
     gen = generate_key()
-    db.add(models.APIKey(name="rw", prefix=gen.prefix, key_hash=gen.key_hash,
-                         scopes=["read", "write"]))
+    # A full committee key. Since SEC-05, blanket read/write no longer reaches the
+    # isolated finance/sponsors modules, so exercising those routes needs their
+    # per-module scopes explicitly.
+    db.add(models.APIKey(
+        name="rw", prefix=gen.prefix, key_hash=gen.key_hash,
+        scopes=["read", "write", "read:sponsors", "write:sponsors", "read:finance", "write:finance"],
+    ))
     db.commit()
     return gen.raw_key
 

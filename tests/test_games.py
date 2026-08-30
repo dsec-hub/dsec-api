@@ -501,19 +501,24 @@ def test_public_sponsor_lead_intake_needs_no_key(client):
     assert r.status_code == 201, r.text
 
 
-def test_legacy_blanket_keys_still_reach_finance_and_sponsors(client, db):
-    """Backward compatibility for the narrowed enforced modules.
+def test_legacy_blanket_keys_are_now_isolated_from_finance_and_sponsors(client, db):
+    """SEC-05: the finance/sponsors modules are isolated even against the legacy
+    coarse read/write scopes — the whole point of calling them "enforced". A
+    blanket key must NOT reach them; only an explicit read:finance / write:sponsors
+    (etc.) does.
 
-    dsec-hub and dsec-app hold blanket read/write keys. If narrowing these
-    routes revoked their access, the change would break both on deploy.
+    NOTE (deploy risk): this reverses the prior backward-compat guarantee. Any
+    client still holding a blanket read/write key (historically dsec-hub /
+    dsec-app) will now get 403 on these routes and must be re-minted with the
+    per-module finance/sponsors scopes before this ships.
     """
     legacy = _make_key(db, ["read", "write"], "legacy-enforced")
-    assert client.get("/finance/summary", headers=_h(legacy)).status_code == 200
-    assert client.get("/sponsors", headers=_h(legacy)).status_code == 200
-    assert client.get("/sponsor-packages", headers=_h(legacy)).status_code == 200
+    assert client.get("/finance/summary", headers=_h(legacy)).status_code == 403
+    assert client.get("/sponsors", headers=_h(legacy)).status_code == 403
+    assert client.get("/sponsor-packages", headers=_h(legacy)).status_code == 403
 
-    legacy_ro = _make_key(db, ["read"], "legacy-enforced-ro")
-    assert client.get("/finance/summary", headers=_h(legacy_ro)).status_code == 200
-    assert client.post(
-        "/sponsors", json={"name": "Acme"}, headers=_h(legacy_ro)
-    ).status_code == 403
+    # An explicit per-module key is the supported way in.
+    ok = _make_key(db, ["read:finance", "read:sponsors"], "enforced-ok")
+    assert client.get("/finance/summary", headers=_h(ok)).status_code == 200
+    assert client.get("/sponsors", headers=_h(ok)).status_code == 200
+    assert client.get("/sponsor-packages", headers=_h(ok)).status_code == 200

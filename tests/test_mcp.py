@@ -120,15 +120,19 @@ def test_trigger_scope_required_for_notes(db):
 def test_has_scope_backward_compatible_algebra():
     has_scope = mcpauth.has_scope
     R = frozenset
-    # legacy "read" ⊇ every read:* (kept working everywhere)
-    assert has_scope(R({"read"}), "read:sponsors")
-    assert has_scope(R({"read"}), "read:finance")
-    # legacy "write" ⊇ every write:*, every read:*, and legacy "read"
-    assert has_scope(R({"write"}), "write:finance")
-    assert has_scope(R({"write"}), "read:sponsors")
+    # legacy "read" ⊇ every read:* EXCEPT the isolated modules (finance/sponsors).
+    assert has_scope(R({"read"}), "read:members")     # non-isolated: legacy read covers it
+    # SEC-05: the legacy coarse scopes never cover an isolated module.
+    assert not has_scope(R({"read"}), "read:sponsors")
+    assert not has_scope(R({"read"}), "read:finance")
+    assert not has_scope(R({"write"}), "write:finance")
+    assert not has_scope(R({"write"}), "read:sponsors")
+    # legacy "write" still ⊇ non-isolated read/write scopes, and legacy "read"
+    assert has_scope(R({"write"}), "write:people")
     assert has_scope(R({"write"}), "read")
-    # write:X implies read:X
+    # write:X implies read:X (including the isolated modules)
     assert has_scope(R({"write:sponsors"}), "read:sponsors")
+    assert has_scope(R({"write:finance"}), "read:finance")
     # module scopes match exactly — no cross-module bleed
     assert not has_scope(R({"read:events"}), "read:sponsors")
     assert not has_scope(R({"read:sponsors"}), "read:finance")
@@ -141,23 +145,54 @@ def test_has_scope_backward_compatible_algebra():
 
 
 def test_enforced_module_scope_isolation(db):
-    """The Phase-2A proof: a focus-only module key can't reach the isolated
-    Sponsors/Finance tools, a per-module key reaches only its module, and a
-    legacy `read` key still reaches everything (backward compatible)."""
+    """SEC-05: a focus-only module key can't reach the isolated Sponsors/Finance
+    tools, a per-module key reaches only its own module, and — unlike before —
+    even a legacy `read`/`write` key is refused (the coarse scopes no longer
+    cover an isolated module)."""
     # A key with only read:events is rejected by the enforced tools.
     with as_key(["read:events"]):
         with pytest.raises(mcpauth.MCPScopeError):
             mcpserver.list_sponsors()
         with pytest.raises(mcpauth.MCPScopeError):
             mcpserver.finance_summary()
-    # A legacy read key is accepted by list_sponsors (and runs cleanly).
-    with as_key(["read"]):
-        assert mcpserver.list_sponsors() == []
+    # SEC-05: a legacy read/write key can no longer reach the isolated tools.
+    with as_key(["read", "write"]):
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.list_sponsors()
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.finance_summary()
     # A per-module key reaches its own module but not the other enforced one.
     with as_key(["read:sponsors"]):
         assert mcpserver.list_sponsors() == []
         with pytest.raises(mcpauth.MCPScopeError):
             mcpserver.finance_summary()
+
+
+def test_focus_only_role_cannot_reach_enforced_tools(db, monkeypatch):
+    """SEC-05 composition test: feed scopes_for_grant's REAL output into has_scope.
+
+    An Events-Lead-style role (events + people, write events) is issued blanket
+    read/write PLUS its per-module scopes — the exact grant that used to let its
+    blanket write satisfy write:finance. Fails on the pre-fix has_scope.
+    """
+    from app.features.oauth import service, users
+    monkeypatch.setattr(users, "_role_perms", lambda d, u: (["events", "people"], ["events"]))
+    granted = frozenset(service.scopes_for_grant(db, object(), {"read", "write"}))
+    for s in ("read:finance", "write:finance", "read:sponsors", "write:sponsors"):
+        assert not mcpauth.has_scope(granted, s), s
+
+
+def test_focus_only_grant_is_refused_by_enforced_tools_end_to_end(db, monkeypatch):
+    """End-to-end mirror of the composition test: the grant scopes_for_grant
+    actually produces must be refused by the enforced MCP tools themselves."""
+    from app.features.oauth import service, users
+    monkeypatch.setattr(users, "_role_perms", lambda d, u: (["events", "people"], ["events"]))
+    granted = list(service.scopes_for_grant(db, object(), {"read", "write"}))
+    with as_key(granted):
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.finance_summary()
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.list_sponsors()
 
 
 def test_oauth_scope_derivation_isolates_enforced_modules(db, monkeypatch):
