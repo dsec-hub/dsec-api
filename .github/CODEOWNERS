@@ -1,0 +1,24 @@
+# Code owners for dsec-api (FastAPI backend; owns the database schema).
+# Last match wins, so the owner-only overrides sit *after* the default.
+#
+# @dsec-hub/dsec-leads  — trusted reviewers (default)
+# @Clupai8o0            — maintainer; the ONLY reviewer for the schema, the
+#                         migrations, and the auth boundary.
+
+# Default: any lead may review.
+*                       @dsec-hub/dsec-leads
+
+# The shared schema is authored here. Every column the whole club depends on
+# lives in models.py, and Alembic is its sole author — a bad migration can drop
+# app-owned tables or 500 production. Maintainer-only.
+/app/models.py          @Clupai8o0
+/alembic/               @Clupai8o0
+
+# Auth, config, and the DB engine — the security and connection boundary.
+/app/auth.py            @Clupai8o0
+/app/config.py          @Clupai8o0
+/app/db.py              @Clupai8o0
+
+# Governance and CI config (including the production guard).
+/.github/               @Clupai8o0
+/CONTRIBUTING.md        @Clupai8o0
