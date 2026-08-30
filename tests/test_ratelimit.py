@@ -81,3 +81,19 @@ def test_separate_ips_do_not_share_a_bucket(db, monkeypatch):
     rl.limiter.check_request(db, key_id=None, ip="10.4.4.4")
     with pytest.raises(HTTPException):
         rl.limiter.check_request(db, key_id=None, ip="10.3.3.3")
+
+
+def test_trigger_and_request_counters_coexist_in_the_same_window(db):
+    """OPS-05: at 00:00 UTC the minute-window and the day-window are the same
+    timestamp, so one key's 'trigger' row and its 'req' row collide on
+    UNIQUE(key_id, window_start). The constraint must include `bucket`.
+
+    Fails with IntegrityError against the old (key_id, window_start) key; passes
+    once the unique key is (key_id, bucket, window_start).
+    """
+    midnight = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    db.add(RateLimit(key_id=1, bucket="trigger", window_start=midnight, trigger_count_today=1))
+    db.commit()
+    # Same key, same window, different bucket — must be allowed.
+    db.add(RateLimit(key_id=1, bucket="req", window_start=midnight, count=1))
+    db.commit()  # <-- IntegrityError on the pre-fix constraint
