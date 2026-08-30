@@ -94,6 +94,24 @@ def test_project_duplicate_explicit_slug_is_422_not_500(client, rw_key):
     assert "showcase" in r.text and "in use" in r.text
 
 
+def test_project_explicit_overlong_slug_is_422_not_500(client, rw_key):
+    # A 300-char normalised slug would overflow the VARCHAR(256) and 500 on commit.
+    r = client.post("/projects", json={"name": "Big", "slug": "a" * 300}, headers=_h(rw_key))
+    assert r.status_code == 422
+    assert "256" in r.text
+
+
+def test_project_auto_slug_from_long_name_is_bounded(client, rw_key):
+    r = client.post("/projects", json={"name": "z" * 400}, headers=_h(rw_key))
+    assert r.status_code == 201
+    slug = r.json()["slug"]
+    assert 0 < len(slug) <= 256
+    # A second one collides on the truncated base and still fits with its suffix.
+    r2 = client.post("/projects", json={"name": "z" * 400}, headers=_h(rw_key))
+    assert r2.status_code == 201
+    assert len(r2.json()["slug"]) <= 256 and r2.json()["slug"] != slug
+
+
 def test_project_patch_slug_collision_and_self(client, rw_key):
     a = client.post("/projects", json={"name": "A", "slug": "alpha"}, headers=_h(rw_key)).json()
     b = client.post("/projects", json={"name": "B", "slug": "beta"}, headers=_h(rw_key)).json()

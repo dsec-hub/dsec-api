@@ -25,17 +25,29 @@ def _attach_owners(db: Session, rows):
     return rows
 
 
+# Matches the Project.slug column (String(256)) — a normalised slug longer than
+# this would pass validation then 500 on the VARCHAR at commit time.
+_MAX_SLUG_LEN = 256
+
+
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
     return slug or "project"
 
 
 def _unique_slug(db: Session, base: str) -> str:
-    slug, n = base, 2
-    while db.execute(select(Project.id).where(Project.slug == slug)).first() is not None:
-        slug = f"{base}-{n}"
+    # Bound the auto-generated slug (from a possibly very long name) to the column
+    # width, reserving room for a `-N` collision suffix so it never overflows.
+    base = (base or "project")[:_MAX_SLUG_LEN].strip("-") or "project"
+    if db.execute(select(Project.id).where(Project.slug == base)).first() is None:
+        return base
+    n = 2
+    while True:
+        suffix = f"-{n}"
+        candidate = f"{base[:_MAX_SLUG_LEN - len(suffix)].strip('-')}{suffix}"
+        if db.execute(select(Project.id).where(Project.slug == candidate)).first() is None:
+            return candidate
         n += 1
-    return slug
 
 
 def list_projects(
@@ -78,6 +90,8 @@ def create_project(db: Session, data: dict) -> Project:
         # duplicate is a clean ValueError (-> 422) rather than a DB IntegrityError
         # -> 500 from the unique index.
         slug = _slugify(raw)
+        if len(slug) > _MAX_SLUG_LEN:
+            raise ValueError(f"slug must be at most {_MAX_SLUG_LEN} characters")
         if db.execute(select(Project.id).where(Project.slug == slug)).first() is not None:
             raise ValueError(f"slug '{slug}' is already in use")
         data["slug"] = slug
@@ -105,6 +119,8 @@ def update_project(db: Session, project_id: int, data: dict) -> Project | None:
         raw = (data.get("slug") or "").strip()
         slug = _slugify(raw) if raw else None
         if slug and slug != proj.slug:
+            if len(slug) > _MAX_SLUG_LEN:
+                raise ValueError(f"slug must be at most {_MAX_SLUG_LEN} characters")
             if db.execute(
                 select(Project.id).where(Project.slug == slug, Project.id != project_id)
             ).first() is not None:
