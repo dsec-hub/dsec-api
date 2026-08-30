@@ -15,7 +15,13 @@ from openpyxl import Workbook
 
 from app import models
 from app.core.apikeys import generate_key
-from app.features.ingest.parser import excel_to_date, parse_membership, parse_pnl
+from app.features.ingest import service
+from app.features.ingest.parser import (
+    MembershipParse,
+    excel_to_date,
+    parse_membership,
+    parse_pnl,
+)
 
 _EPOCH = date(1899, 12, 30)
 
@@ -48,11 +54,11 @@ _SAMPLE_MEMBERS = [
 ]
 
 
-def build_membership_xlsx(members=_SAMPLE_MEMBERS) -> bytes:
+def build_membership_xlsx(members=_SAMPLE_MEMBERS, headers=_MEMBER_HEADERS) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"
-    ws.append(_MEMBER_HEADERS)
+    ws.append(headers)
     for m in members:
         name, sid, email, campus, first, last, end, faculty, kind, pay = m
         # Dates as Excel serial numbers, exactly like the real DUSA export.
@@ -262,9 +268,15 @@ def test_report_date_handles_daylight_saving_boundary(client, ingest_key, db):
     assert rep.report_date.isoformat() == "2026-01-12"
 
 
-def test_ingest_membership_marks_dropped_members_not_current(client, ingest_key, db):
+def test_ingest_membership_marks_dropped_members_not_current(client, ingest_key, db, monkeypatch):
+    from app.config import settings
+
     _post(client, ingest_key, report_type="membership", message_id="wk1",
           data=build_membership_xlsx())
+    # Dropping 3 members to 1 is a 67% collapse — the roster guard blocks that by
+    # default (NEW-APPDEEP-03). This test exercises the *legitimate* mass-drop
+    # path, so it opts in via the deliberate override a human would set.
+    monkeypatch.setattr(settings, "DUSA_INGEST_OVERRIDE", True)
     # Next week only the first member remains.
     _post(client, ingest_key, report_type="membership", message_id="wk2",
           data=build_membership_xlsx(members=_SAMPLE_MEMBERS[:1]))
@@ -306,3 +318,108 @@ def test_imports_listing(client, ingest_key):
     assert r.status_code == 200
     rows = r.json()
     assert rows and rows[0]["message_id"] == "li-1" and rows[0]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Roster-wipe guard (NEW-APPDEEP-03, part B)
+# ---------------------------------------------------------------------------
+#
+# A membership import replaces the whole roster (everyone not-current, then the
+# rows present in the file back on). A truncated/mis-parsed spreadsheet would
+# therefore silently strand every omitted member. The guard refuses to ingest a
+# report that is empty or has collapsed relative to the previous one; the single
+# load-bearing assertion in each case is that `is_current` is left untouched.
+
+def _seed_roster(db, n: int, *, baseline: int | None = None):
+    """n current members + (optionally) a prior MemberReport of `baseline` rows."""
+    for i in range(n):
+        db.add(models.Member(student_id=str(i), is_current=True))
+    if baseline is not None:
+        db.add(models.MemberReport(total_members=baseline))
+    db.commit()
+
+
+def _parsed(n: int) -> MembershipParse:
+    return MembershipParse(members=[{"student_id": str(i)} for i in range(n)], total=n)
+
+
+def test_ingest_membership_refuses_empty_report(db):
+    _seed_roster(db, 200, baseline=200)
+    with pytest.raises(service.RosterGuardRejected):
+        service._ingest_membership(db, _parsed(0), import_id=None, report_date=date(2026, 6, 12))
+    db.rollback()
+    assert db.query(models.Member).filter_by(is_current=True).count() == 200  # untouched
+
+
+def test_ingest_membership_refuses_collapse(db):
+    _seed_roster(db, 200, baseline=200)
+    with pytest.raises(service.RosterGuardRejected):
+        service._ingest_membership(db, _parsed(50), import_id=None, report_date=date(2026, 6, 12))
+    db.rollback()
+    assert db.query(models.Member).filter_by(is_current=True).count() == 200  # untouched
+
+
+def test_ingest_membership_allows_normal_drop(db):
+    _seed_roster(db, 200, baseline=200)
+    # 195 is within 80% of 200 — a normal week of non-renewals, not a wipe.
+    rows = service._ingest_membership(db, _parsed(195), import_id=None, report_date=date(2026, 6, 12))
+    db.commit()
+    assert rows == 195
+    assert db.query(models.Member).filter_by(is_current=True).count() == 195
+
+
+def test_ingest_membership_override_allows_collapse(db):
+    _seed_roster(db, 200, baseline=200)
+    # A human who has eyeballed the spreadsheet can still apply a real mass drop.
+    rows = service._ingest_membership(
+        db, _parsed(50), import_id=None, report_date=date(2026, 6, 12), override=True
+    )
+    db.commit()
+    assert rows == 50
+    assert db.query(models.Member).filter_by(is_current=True).count() == 50
+
+
+def test_ingest_membership_override_never_bypasses_empty(db):
+    _seed_roster(db, 200, baseline=200)
+    # Even with override, a zero-row report is never a legitimate roster.
+    with pytest.raises(service.RosterGuardRejected):
+        service._ingest_membership(
+            db, _parsed(0), import_id=None, report_date=date(2026, 6, 12), override=True
+        )
+    db.rollback()
+    assert db.query(models.Member).filter_by(is_current=True).count() == 200
+
+
+def test_ingest_membership_first_import_has_no_baseline(db):
+    # The very first import has nothing to compare against, so any non-empty count
+    # is accepted.
+    _seed_roster(db, 0)  # no members, no prior report
+    rows = service._ingest_membership(db, _parsed(3), import_id=None, report_date=date(2026, 6, 12))
+    db.commit()
+    assert rows == 3
+    assert db.query(models.Member).filter_by(is_current=True).count() == 3
+
+
+def test_ingest_endpoint_rejects_roster_wipe(client, ingest_key, db):
+    # A healthy import establishes a baseline of 3...
+    assert _post(client, ingest_key, report_type="membership", message_id="base",
+                 data=build_membership_xlsx()).status_code == 200
+    # ...then a single-member follow-up (a 67% collapse) is refused: HTTP 422, the
+    # import recorded `needs_review` with both counts, roster untouched.
+    r = _post(client, ingest_key, report_type="membership", message_id="wipe",
+              data=build_membership_xlsx(members=_SAMPLE_MEMBERS[:1]))
+    assert r.status_code == 422, r.text
+    assert db.query(models.Member).filter_by(is_current=True).count() == 3  # untouched
+    imp = db.query(models.DusaImport).filter_by(message_id="wipe").one()
+    assert imp.status == "needs_review"
+    assert imp.detail and "1" in imp.detail and "3" in imp.detail  # both row counts named
+
+
+def test_parse_membership_raises_on_renamed_headers():
+    # If DUSA renames every header, the column mapping comes back empty. That is a
+    # MALFORMED report, not an empty one — raise rather than silently return
+    # total=0 (which the ingest would treat as "zero members" and wipe the
+    # roster). (NEW-APPDEEP-03)
+    renamed = [f"Column {i}" for i in range(len(_MEMBER_HEADERS))]
+    with pytest.raises(ValueError):
+        parse_membership(build_membership_xlsx(headers=renamed))

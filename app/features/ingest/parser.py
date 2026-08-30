@@ -122,6 +122,18 @@ def parse_membership(data: bytes) -> MembershipParse:
                 col_field[idx] = field_name
                 break
 
+    # An empty mapping means the header row matched NONE of our known columns —
+    # DUSA renamed/removed the headers. That is a MALFORMED report, not an empty
+    # one: every data row would then be skipped by the blank-row guard below and
+    # the parse would silently return total=0, which the ingest treats as "the
+    # club has zero members" and wipes the roster. Raise so the ingest records a
+    # `failed` import and the destructive refresh never runs. (NEW-APPDEEP-03)
+    if not col_field:
+        raise ValueError(
+            "membership report header row matched no known columns — the report "
+            "looks malformed (renamed or missing headers)"
+        )
+
     out = MembershipParse()
     for row in rows:
         rec: dict[str, Any] = {}
