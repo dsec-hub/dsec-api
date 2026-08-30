@@ -748,7 +748,11 @@ def public_page_preview(
     if document_id is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")
     doc = db.execute(
-        select(Document).where(Document.id == document_id, Document.archived.is_(False))
+        select(Document).where(
+            Document.id == document_id,
+            Document.archived.is_(False),
+            Document.type == "Page",
+        )
     ).scalar_one_or_none()
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "page not found")

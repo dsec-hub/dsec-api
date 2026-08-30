@@ -8,12 +8,21 @@ from __future__ import annotations
 
 from app.core.apikeys import generate_key
 from app import models
+from app.features.website.preview import make_page_preview_token
 
 
 def _write_key(db) -> str:
     gen = generate_key()
     db.add(models.APIKey(name="t", prefix=gen.prefix, key_hash=gen.key_hash,
                          scopes=["read", "write"]))
+    db.commit()
+    return gen.raw_key
+
+
+def _read_key(db) -> str:
+    gen = generate_key()
+    db.add(models.APIKey(name="ro", prefix=gen.prefix, key_hash=gen.key_hash,
+                         scopes=["read"]))
     db.commit()
     return gen.raw_key
 
@@ -62,7 +71,7 @@ def test_draft_page_is_hidden_but_previewable(client, db):
     key = _write_key(db)
     h = {"authorization": f"Bearer {key}"}
     r = client.post("/documents", headers=h, json={
-        "title": "Secret", "slug": "secret-page", "is_public": False,
+        "title": "Secret", "type": "Page", "slug": "secret-page", "is_public": False,
         "content_json": _blocks(),
     })
     doc_id = r.json()["id"]
@@ -125,3 +134,50 @@ def test_empty_blocks_are_dropped(client, db):
     })
     blocks = client.get("/website/pages/sparse").json()["blocks"]
     assert [b["type"] for b in blocks] == ["heading", "divider"]
+
+
+# --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-01: page-preview links are Page-only and need the write scope
+# --------------------------------------------------------------------------- #
+
+def test_page_preview_link_requires_write_scope(client, db):
+    key = _write_key(db)
+    h = {"authorization": f"Bearer {key}"}
+    doc_id = client.post("/documents", headers=h, json={
+        "title": "P", "type": "Page", "slug": "p-scope", "content_json": _blocks(),
+    }).json()["id"]
+    # A read-only key cannot mint the delegation link.
+    ro = {"authorization": f"Bearer {_read_key(db)}"}
+    assert client.get(f"/documents/{doc_id}/page-preview-link", headers=ro).status_code == 403
+
+
+def test_page_preview_link_rejects_non_page_document(client, db):
+    key = _write_key(db)
+    h = {"authorization": f"Bearer {key}"}
+    doc_id = client.post("/documents", headers=h, json={
+        "title": "Minutes", "type": "MeetingNotes", "content_json": _blocks(),
+    }).json()["id"]
+    r = client.get(f"/documents/{doc_id}/page-preview-link", headers=h)
+    assert r.status_code == 400
+
+
+def test_meeting_notes_cannot_be_reached_through_page_preview(client, db):
+    # Build a non-Page doc directly and mint a valid token for it, bypassing the
+    # router's own guard so we test the consumer's independent Page filter.
+    doc = models.Document(title="Sponsorship negotiation", type="MeetingNotes",
+                          content_json=_blocks(), archived=False)
+    db.add(doc)
+    db.commit()
+    token = make_page_preview_token(doc.id)
+    assert client.get(f"/website/pages/preview/{token}").status_code == 404
+
+
+def test_page_preview_token_defaults_to_page_ttl():
+    from app.config import settings
+    import time
+    before = int(time.time())
+    token = make_page_preview_token(123)
+    exp = int(token.split(".")[1])
+    # Within a small window of now + PAGE_PREVIEW_TTL, and far below EVENT_PREVIEW_TTL.
+    assert abs(exp - (before + settings.PAGE_PREVIEW_TTL)) <= 5
+    assert exp < before + settings.EVENT_PREVIEW_TTL

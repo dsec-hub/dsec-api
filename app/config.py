@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     # required secret; set it to rotate every outstanding preview link at once.
     EVENT_PREVIEW_SECRET: str = ""
     EVENT_PREVIEW_TTL: int = 7 * 24 * 3600  # signed-link lifetime (7 days)
+    # Page previews are a "look before you publish" action, not a shareable link.
+    # Deliberately much shorter than EVENT_PREVIEW_TTL.
+    PAGE_PREVIEW_TTL: int = 60 * 60  # 1 hour
 
     # --- Pre-meeting agenda share links ---
     # When a meeting agenda is shared, the API stamps a stable, unguessable token

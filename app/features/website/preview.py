@@ -91,8 +91,11 @@ def _sign_page(document_id: int, exp: int) -> str:
 
 
 def make_page_preview_token(document_id: int, ttl: int | None = None) -> str:
-    """Mint a fresh preview token for a page document, valid for ``ttl`` seconds."""
-    window = ttl if ttl is not None else settings.EVENT_PREVIEW_TTL
+    """Mint a fresh preview token for a page document, valid for ``ttl`` seconds.
+
+    Defaults to the short PAGE_PREVIEW_TTL (a page preview is minutes, not a week
+    like an event preview)."""
+    window = ttl if ttl is not None else settings.PAGE_PREVIEW_TTL
     exp = int(time.time()) + int(window)
     return f"{document_id}.{exp}.{_sign_page(document_id, exp)}"
 
