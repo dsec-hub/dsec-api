@@ -92,3 +92,17 @@ def archive_project(
     if proj is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     return ProjectOut.model_validate(proj)
+
+
+@router.post("/{project_id}/unarchive", response_model=ProjectOut)
+def unarchive_project(
+    project_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> ProjectOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    proj = service.unarchive_project(db, project_id)
+    if proj is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+    return ProjectOut.model_validate(proj)

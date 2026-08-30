@@ -20,6 +20,18 @@ class DraftResponse(BaseModel):
     draftBody: str | None = None
 
 
+class NotifyRequest(BaseModel):
+    """A message to relay to the committee's Discord channel."""
+
+    message: str = Field(..., min_length=1, max_length=2000)
+    # Optional label shown as the webhook's display name (e.g. "DSEC Bot").
+    username: str | None = Field(default=None, max_length=80)
+
+
+class NotifyResponse(BaseModel):
+    delivered: bool
+
+
 class LogEntry(BaseModel):
     id: int
     created_at: datetime

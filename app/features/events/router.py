@@ -135,6 +135,20 @@ def archive_event(
     return EventOut.model_validate(event)
 
 
+@router.post("/{event_id}/unarchive", response_model=EventOut)
+def unarchive_event(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> EventOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    event = service.unarchive_event(db, event_id)
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+    return EventOut.model_validate(event)
+
+
 # --------------------------------------------------------------------------- #
 # Event relations: speakers / sponsor links / partner links
 # --------------------------------------------------------------------------- #

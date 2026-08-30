@@ -221,6 +221,67 @@ class Settings(BaseSettings):
     DISCORD_WEBHOOK_SECRET: str = ""
     CALCOM_WEBHOOK_SECRET: str = ""
 
+    # --- Outbound Discord relay (POST /public/notify, Cal.com booking alerts) ---
+    # A Discord *incoming webhook* URL (Server Settings -> Integrations -> Webhooks
+    # -> New Webhook -> Copy URL). This is the simplest outbound channel: no bot
+    # token, no gateway socket, no OAuth — an HTTPS POST of {"content": "..."}
+    # drops a message into one channel. Kept server-side like every other secret.
+    # BLANK (default) disables all outbound Discord: /public/notify returns 503 and
+    # the Cal.com booking alert silently no-ops. That is the correct default for
+    # local dev and for a deploy that has not wired a webhook yet.
+    DISCORD_NOTIFY_WEBHOOK_URL: str = ""
+    # Post a short alert to Discord whenever a Cal.com booking lands (a new sponsor
+    # lead). Off by default so enabling the webhook for /public/notify does not also
+    # start narrating bookings; flip on to get booking pings in the channel.
+    CALCOM_NOTIFY_DISCORD: bool = False
+
+    # --- Structured logging (host log drains) ---
+    # LOG_FORMAT="json" emits one JSON object per line (timestamp, level, logger,
+    # message, + any structured extras) for a log drain / aggregator to parse;
+    # "text" (default) keeps the human-readable console format, so this is a no-op
+    # until explicitly switched on. LOG_LEVEL tunes verbosity (DEBUG/INFO/WARNING/...).
+    LOG_FORMAT: str = "text"
+    LOG_LEVEL: str = "INFO"
+
+    # --- Email decision-maker -> DUSA pipeline (ships DARK) ---
+    # After the classify+draft stages, an optional LLM "decision-maker" stage can
+    # read the email against a compact snapshot of open events and propose ONE
+    # structured action (today: update_dusa_status) to keep the dashboard's DUSA
+    # kanban in sync without anyone touching it by hand.
+    #
+    # Two independent guards, both defaulting to the SAFE position so the feature
+    # ships dark and mutates nothing until an operator opts in:
+    #   * EMAIL_DECISION_MAKER_ENABLED=False -> the stage never runs (unchanged
+    #     draft-only behaviour). Turn on to START PROPOSING actions.
+    #   * EMAIL_DECISION_DRY_RUN=True -> the stage runs and LOGS its proposed
+    #     action to EventLog (so the audit view shows exactly what it *would* do)
+    #     but writes NOTHING to the event. Set False only once the logged
+    #     proposals look right — that is the human-confirm step from the runbook.
+    # A proposal is applied only when enabled AND not dry-run AND the deterministic
+    # event match clears EMAIL_MATCH_MIN_CONFIDENCE; otherwise it degrades to a
+    # drafted reply flagged for a human. At most ONE event is mutated per email.
+    EMAIL_DECISION_MAKER_ENABLED: bool = False
+    EMAIL_DECISION_DRY_RUN: bool = True
+    # Minimum name-match confidence (0..1) before an email may mutate an event.
+    # Below this the decision is logged + flagged for a human, never applied.
+    EMAIL_MATCH_MIN_CONFIDENCE: float = 0.8
+    # Comma-separated sender domains authorised to drive a DUSA status change
+    # (e.g. "deakin.edu.au,dusa.org.au"). The matcher decides WHICH event; this
+    # decides WHETHER the sender is allowed to move it — otherwise anyone who
+    # emails the committee could spoof "your event is approved" and, in live mode,
+    # flip the kanban. BLANK trusts NO sender: a decision is still logged/flagged
+    # but never applied, so live mode does nothing until this is configured.
+    EMAIL_DUSA_SENDER_DOMAINS: str = ""
+
+    @property
+    def dusa_sender_domains(self) -> set[str]:
+        """EMAIL_DUSA_SENDER_DOMAINS parsed to a lower-cased set of bare domains."""
+        return {
+            d.strip().lower().lstrip("@")
+            for d in self.EMAIL_DUSA_SENDER_DOMAINS.split(",")
+            if d.strip()
+        }
+
     # --- Discord bot / slash-command interactions (games platform) ---
     # The Discord bot is a WEBHOOK bot (no gateway socket): Discord POSTs each
     # interaction to /discord/interactions, which is verified with Ed25519 (NOT

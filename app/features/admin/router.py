@@ -18,7 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.auth import require_basic_auth
 from app.core.apikeys import VALID_SCOPES, generate_key, require_api_key
+from app.core.logging import log_event
 from app.core.net import client_ip
+from app.features.archive.service import build_export_bundle
 from app.features.mcp.auth import has_scope
 from app.core.ratelimit import limiter
 from app.db import get_db
@@ -174,3 +176,33 @@ def revoke_key(
     db.commit()
     db.refresh(row)
     return KeyInfo.model_validate(row)
+
+
+@router.get("/archive/export")
+def archive_export(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_basic_auth),
+) -> dict:
+    """Portable, secret-free workspace manifest for end-of-year handover.
+
+    Basic-auth protected (dashboard owner). Returns the deployment's schema,
+    per-table row counts, env var NAMES (never values), and the API key list
+    (never hashes) so the next committee can re-deploy to a fresh Vercel + Neon
+    without archaeology. Emits no secret and no student PII — a genuine data
+    snapshot is intentionally out of scope (use `pg_dump` with DB creds). The
+    export itself is audited.
+    """
+    bundle = build_export_bundle(db)
+    log_event(
+        db,
+        source="admin",
+        action="archive_export",
+        classification="generated",
+        payload={
+            "tables": len(bundle["schema"]),
+            "env_vars": len(bundle["env_vars"]),
+            "api_keys": len(bundle["api_keys"]),
+            "alembic_revision": bundle["alembic_revision"],
+        },
+    )
+    return bundle

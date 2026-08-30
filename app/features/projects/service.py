@@ -106,3 +106,13 @@ def archive_project(db: Session, project_id: int) -> Project | None:
     db.commit()
     db.refresh(proj)
     return _attach_owners(db, proj)
+
+
+def unarchive_project(db: Session, project_id: int) -> Project | None:
+    proj = db.get(Project, project_id)
+    if proj is None:
+        return None
+    proj.archived = False
+    db.commit()
+    db.refresh(proj)
+    return _attach_owners(db, proj)

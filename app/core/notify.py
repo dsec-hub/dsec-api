@@ -59,3 +59,50 @@ def notify_task_assigned(
         )
     except Exception as exc:  # noqa: BLE001 — best-effort; a failed ping must never break the write
         logger.warning("task-assigned notify hand-off failed (task %s): %s", task_id, exc)
+
+
+# Discord rejects an empty message and truncates anything over 2000 characters;
+# clamp on our side so a long relay body degrades to a trimmed message instead of
+# a 400 from Discord.
+_DISCORD_MAX_CONTENT = 2000
+_DISCORD_TIMEOUT = httpx.Timeout(4.0)
+
+
+def notify_discord(content: str, *, username: str | None = None) -> bool:
+    """Post ``content`` to the configured Discord channel via an incoming webhook.
+
+    Fire-and-forget and best-effort, exactly like ``notify_task_assigned``: it
+    runs on a request path (a /public/notify relay, a Cal.com booking alert), uses
+    a short timeout, and swallows every error so a slow or unreachable Discord
+    never fails the caller. Returns True if a webhook POST was attempted and Discord
+    accepted it (2xx), False otherwise (unconfigured, empty body, or delivery
+    error) so a caller that wants to surface "not delivered" can.
+
+    No-op returning False when ``DISCORD_NOTIFY_WEBHOOK_URL`` is blank.
+    """
+    if not settings.DISCORD_NOTIFY_WEBHOOK_URL:
+        return False
+    body = (content or "").strip()
+    if not body:
+        return False
+    if len(body) > _DISCORD_MAX_CONTENT:
+        body = body[: _DISCORD_MAX_CONTENT - 1] + "…"  # ellipsis
+    # allowed_mentions parse=[] neutralises @everyone / @here / role & user pings:
+    # the relay body can carry untrusted text (a Cal.com booker's name/company, a
+    # relayed message) that must not be able to notify the whole channel.
+    payload: dict = {"content": body, "allowed_mentions": {"parse": []}}
+    if username:
+        payload["username"] = username[:80]
+    try:
+        resp = httpx.post(
+            settings.DISCORD_NOTIFY_WEBHOOK_URL,
+            json=payload,
+            timeout=_DISCORD_TIMEOUT,
+        )
+        if resp.status_code >= 400:
+            logger.warning("discord notify rejected: HTTP %s", resp.status_code)
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 — best-effort; delivery failure must never raise
+        logger.warning("discord notify failed: %s", exc)
+        return False

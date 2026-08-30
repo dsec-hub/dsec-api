@@ -89,8 +89,22 @@ class RateLimit(Base):
     """Fixed-window counter row backing the Neon rate limiter."""
 
     __tablename__ = "rate_limit"
+    # The unique key includes `bucket`. Excluding it was a latent bug: a request
+    # at exactly 00:00 UTC produces a per-minute row (bucket='req') AND a per-day
+    # trigger row (bucket='trigger') that share window_start=midnight, so the two
+    # collided under the old (key_id, window_start) key.
+    #
+    # DIVERGENCE (deliberate): on Neon the key is created by migration
+    # b1d4f7a9c3e2 as a UNIQUE INDEX with `NULLS NOT DISTINCT` (PG15+), so
+    # concurrent per-IP rows (key_id NULL) can no longer split into duplicate
+    # counters. This model instead declares a plain UniqueConstraint of the same
+    # name: SQLAlchemy has no portable `NULLS NOT DISTINCT`, and this constraint
+    # only ever builds the SQLite dev/test schema (create_all), where NULLs are
+    # always distinct regardless. Prod schema = the migration, not this line.
     __table_args__ = (
-        UniqueConstraint("key_id", "window_start", name="uq_ratelimit_key_window"),
+        UniqueConstraint(
+            "key_id", "bucket", "window_start", name="uq_ratelimit_key_bucket_window"
+        ),
         Index("ix_ratelimit_key_window", "key_id", "window_start"),
     )
 

@@ -37,7 +37,7 @@ def list_documents(
     limit: int = Query(100, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:documents")),
 ) -> list[DocumentOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_documents(
@@ -56,7 +56,7 @@ def get_document(
     document_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:documents")),
 ) -> DocumentOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.get_document(db, document_id)
@@ -70,7 +70,7 @@ def document_page_preview_link(
     document_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:documents")),
 ) -> dict:
     """Mint an unguessable, time-limited link to preview this document as a page
     on the public site (published OR draft) — the dashboard's "Preview page"
@@ -89,7 +89,7 @@ def create_document(
     body: DocumentCreate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:documents")),
 ) -> DocumentOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     try:
@@ -105,7 +105,7 @@ def update_document(
     body: DocumentUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:documents")),
 ) -> DocumentOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     try:
@@ -122,10 +122,24 @@ def archive_document(
     document_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:documents")),
 ) -> DocumentOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     doc = service.archive_document(db, document_id)
+    if doc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    return DocumentOut.model_validate(doc)
+
+
+@router.post("/{document_id}/unarchive", response_model=DocumentOut)
+def unarchive_document(
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write:documents")),
+) -> DocumentOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    doc = service.unarchive_document(db, document_id)
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
     return DocumentOut.model_validate(doc)

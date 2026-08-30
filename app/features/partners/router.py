@@ -88,3 +88,17 @@ def archive_partner(
     if partner is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "partner not found")
     return PartnerOut.model_validate(partner)
+
+
+@router.post("/{partner_id}/unarchive", response_model=PartnerOut)
+def unarchive_partner(
+    partner_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> PartnerOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    partner = service.unarchive_partner(db, partner_id)
+    if partner is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "partner not found")
+    return PartnerOut.model_validate(partner)

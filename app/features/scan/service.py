@@ -82,6 +82,16 @@ def archive_scan_target(db: Session, target_id: int) -> ScanTarget | None:
     return target
 
 
+def unarchive_scan_target(db: Session, target_id: int) -> ScanTarget | None:
+    target = db.get(ScanTarget, target_id)
+    if target is None:
+        return None
+    target.archived = False
+    db.commit()
+    db.refresh(target)
+    return target
+
+
 def reorder_scan_targets(db: Session, ordered_ids: list[int]) -> list[ScanTarget]:
     """Persist a new ordering: set each target's display_order to its index in
     `ordered_ids`. Unknown ids are skipped. Returns the full display-ordered list."""

@@ -94,6 +94,16 @@ def archive_link(db: Session, link_id: int) -> Link | None:
     return link
 
 
+def unarchive_link(db: Session, link_id: int) -> Link | None:
+    link = db.get(Link, link_id)
+    if link is None:
+        return None
+    link.archived = False
+    db.commit()
+    db.refresh(link)
+    return link
+
+
 def reorder_links(db: Session, ordered_ids: list[int]) -> list[Link]:
     """Persist a new ordering: set each link's display_order to its index in
     `ordered_ids`. Unknown ids are skipped. Returns the full display-ordered

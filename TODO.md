@@ -32,7 +32,11 @@ Tracking work beyond the v1 scaffold. Grouped by area; checked = done.
 ## Email feature — hardening
 - [ ] Expand spam heuristics from real inbox samples (false-positive review).
 - [ ] Validate classify labels against a small eval set; tune prompts/models.
-- [ ] Consider a per-thread dedupe so re-delivered messages don't re-draft.
+- [x] Per-message dedupe so re-delivered messages don't re-draft
+      (`pipeline._already_processed`; keys on `messageId`, only dedupes a durable
+      draft/decision outcome so a cap-hit/LLM-error ignore stays retryable).
+- [x] Bring the agent-secret `/email/process` path under `GLOBAL_DAILY_LLM_CAP`
+      (`ratelimit.check_and_count_llm_global`; keyless spend now counted + bounded).
 
 ## Email decision-maker → DUSA pipeline (planned)
 As of 2026-06-15 **nothing here is deployed**: no Gmail Apps Script exists and no
@@ -49,53 +53,87 @@ the right `Event` and sets `dusa_submission_status = "Approved"` (and
 `dusa_approved = true`). An email saying the submission needs more info / action →
 move it to a "needs attention" state. A submission confirmation → `"Submitted"`.
 
-- [ ] **Decision-maker stage** after classify: an LLM call that, given the email +
-      a compact snapshot of open events, returns a *structured action* (JSON /
-      tool-call), not just a draft. Start with one action type: `update_dusa_status`.
-- [ ] **Event matching**: resolve the email to an `Event` (by name fuzzy-match /
-      explicit DUSA reference / thread). Must be conservative — never mutate on a
-      low-confidence match; fall back to "draft + flag for human".
-- [ ] **Action executor**: apply `update_dusa_status(event_id, status)` against the
-      DB. `status` must be one of the dashboard's `DUSA_STATUSES`
-      (`Not Started | Submitted | Approved | Rejected | Not Required`); also flip
-      `dusa_approved` when moving to/away from `Approved`.
-- [ ] **Auditability**: log every decision to `EventLog` (action taken, target
-      event, confidence, the email that triggered it) so the dashboard audit view
-      shows *why* a card moved. No silent writes.
-- [ ] **Guardrails**: dry-run / human-confirm mode for the first rollout; cap the
-      blast radius (one event per email, no destructive actions); reuse the
-      `GLOBAL_DAILY_LLM_CAP` budget.
-- [ ] **Dashboard reflection**: the dusa kanban reads `dusa_submission_status`
-      directly, so a correct DB write is all the front-end needs — verify the
-      `/events/dusa` board reflects agent-driven moves.
+# STATUS 2026-08-29: the MVP below is BUILT and ships DARK (branch
+# feat/api-continuation). Flags default safe: EMAIL_DECISION_MAKER_ENABLED=False,
+# EMAIL_DECISION_DRY_RUN=True. Turn on to propose; drop dry-run to apply. One
+# outstanding scope decision noted after the list.
+- [x] **Decision-maker stage** after classify: `llm.decide()` returns a structured
+      JSON action against a compact snapshot of open events. One action type today:
+      `update_dusa_status`. (`email/pipeline.py` decision stage, `email/actions.py`.)
+- [x] **Event matching**: `email/matching.py` — conservative stdlib-difflib matcher
+      (exact-subject/body beats fuzzy; refuses near-ties; confidence-scored). Below
+      `EMAIL_MATCH_MIN_CONFIDENCE` it never mutates → drafts + flags for a human.
+- [x] **Action executor**: `email/actions.py` applies `update_dusa_status(event_id,
+      status)` via `events.service.set_dusa_status`; `status` validated against
+      `events/dusa.py::DUSA_STATUSES`. Target is resolved by the deterministic
+      matcher, NOT a trusted LLM id (an LLM id that disagrees is flagged).
+      NOTE: TODO said also flip `Event.dusa_approved` — that column does NOT exist
+      on `Event` (it's a Sponsor field), and the kanban reads `dusa_submission_status`
+      only, so the MVP writes just the status. Add an `Event.dusa_approved` column +
+      migration first if that flag is genuinely wanted.
+- [x] **Auditability**: every decision (including `none`) logs an `EventLog`
+      `email_decision` row — action, target event, confidence, dry-run/applied,
+      reason, `messageId`. No silent writes.
+- [x] **Guardrails**: dry-run/human-confirm defaults; exactly one event per email;
+      no destructive actions; the email path now counts against `GLOBAL_DAILY_LLM_CAP`.
+- [x] **Dashboard reflection**: a correct `dusa_submission_status` write is all the
+      hub kanban needs (it reads Neon directly). No API board endpoint here to test
+      against — verify live once the flag is enabled.
 - [ ] (Later) Generalise beyond DUSA: same decision-maker pattern could update
       sponsor stages, finance, meeting notes, etc. Keep the action registry small
       and explicit per type.
 
 ## v2 integrations
-- [ ] **Discord webhook**: Ed25519 verification + relay/alert logic.
-- [ ] **Cal.com webhook**: HMAC verification + log booking → optional Discord notify.
-- [ ] **`POST /public/notify`**: relay to Discord (trigger-scoped).
+- [x] **Discord webhook**: Ed25519 verification (SEC-03, fail-closed in prod) + the
+      inbound interaction handler. Outbound *alerts INTO* Discord now exist via the
+      relay helper below.
+- [x] **Cal.com webhook**: HMAC verification (fail-closed in prod) + booking →
+      SponsorLead, plus an optional Discord alert (`CALCOM_NOTIFY_DISCORD`, and it
+      never posts the booker's raw email).
+- [x] **`POST /public/notify`**: trigger-scoped relay to Discord via an incoming
+      webhook (`core.notify.notify_discord`, `DISCORD_NOTIFY_WEBHOOK_URL`; 503 when
+      unconfigured, every relay logged to EventLog).
 
 ## Service continuity (future)
 Portal is intended to stay free as it passes between committees. To support that:
-- [ ] **Service migration wizard**: export the full workspace (DB snapshot, env var
-      manifest, API key list) into a portable bundle so the next committee can
-      re-deploy to a fresh Vercel + Neon project without manual archaeology.
+- [x] **Service migration wizard (manifest)**: `GET /admin/archive/export` returns a
+      portable, secret-free JSON bundle — schema snapshot + per-table row counts +
+      alembic revision + env var NAMES (flagged sensitive, never values) + API key
+      list (metadata, never hashes) — so the next committee can re-deploy to a fresh
+      Vercel + Neon without archaeology. Basic-auth (dashboard owner) + audited.
+      NOTE: this is a *manifest*, not a data dump. A genuine row-level snapshot of
+      student PII is deliberately out of scope for an HTTP endpoint — use `pg_dump`
+      with DB creds for that.
 - [ ] **Static archive + storage cleanup**: download all uploaded/stored assets as a
       zip so they can be preserved off-platform, then wipe them from the live storage
       bucket — keeps Neon/Vercel/blob storage within the free tier for the next team.
-- [ ] **Archive dashboard view**: mark an event or finance record as "archived" (read-
-      only, hidden from active lists) rather than deleting it, so the next committee
-      has a clean slate without losing history.
-- [ ] Triggered from the Admin API (`/admin/archive/export`) so it can be run once
-      at end-of-year handover; should require the `admin` scope and log to `EventLog`.
+      (NOT built — the wipe is destructive on live storage; needs an owner decision.)
+- [x] **Archive dashboard view (now reversible)**: every domain record already had an
+      `archived` soft-delete column + `archive_*` action and is hidden from active
+      lists; soft-delete was **one-way** (no undo). Added `unarchive_*` across REST +
+      MCP + catalog for all 11 archivable modules (events, people, sponsors, projects,
+      tasks/boards, meetings, documents, partners, links, scan) so a mistaken archive
+      is recoverable. `FinanceEntry` has an `archived` column but no CRUD surface, so
+      there's nothing to (un)archive there yet — noted, not wired.
+- [x] Triggered from the Admin API (`/admin/archive/export`), basic-auth (the
+      dashboard-owner credential — this codebase has no `admin` API-key scope; basic
+      auth is the highest-privilege gate) and logged to `EventLog` (`archive_export`).
 
 ## Platform / ops
 - [x] Adopt Alembic for migrations (replaced `create_all`; baseline migration +
       `scripts/migrate.py` + `scripts/check_neon.py`; gated by `RUN_MIGRATIONS_ON_STARTUP`).
 - [ ] Optional Redis `RateLimiter` impl for when the API goes public.
+- [x] Per-module scopes for the PII-heavy modules (`read:members`, `read/write:people`,
+      `read/write:documents`) across REST + MCP + the scope catalog. Legacy read/write
+      keys still satisfy them (backward-compatible). Remaining blanket modules (events,
+      tasks, meetings, projects, partners, links, media, attachments, scan, reviews)
+      are still coarse — roll out the same way if/when least-privilege minting needs them.
+- [x] `rate_limit` unique key is now bucket-aware with `NULLS NOT DISTINCT`
+      (migration `b1d4f7a9c3e2`) — fixes the per-IP duplicate-row split AND a latent
+      00:00-UTC collision between the `req` and `trigger` rows. **Owner: run
+      `alembic upgrade head` on Neon at the next deploy** (Postgres-only migration).
 - [x] Basic test suite (pytest + TestClient) covering auth, caps, pipeline branches.
 - [x] Request-size enforcement middleware using `MAX_REQUEST_BYTES` (413, exempts
       the multipart upload routes; see `_register_request_size_limit` in main.py).
-- [ ] Structured/JSON logging for Vercel log drains.
+- [x] Structured/JSON logging for host log drains (`core/logconfig.py`,
+      `LOG_FORMAT=json|text` default text — a no-op until switched on, `LOG_LEVEL`).

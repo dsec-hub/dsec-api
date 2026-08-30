@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,8 @@ from app.config import settings
 from app.core.apikeys import require_api_key
 from app.core.ratelimit import limiter
 from app.core.net import client_ip
+from app.core.notify import notify_discord
+from app.core import logging as event_logging
 from app.db import get_db
 from app.features.email.pipeline import run_pipeline
 from app.features.email.schemas import EmailRequest
@@ -25,6 +27,8 @@ from app.features.public_api.schemas import (
     DraftRequest,
     DraftResponse,
     LogEntry,
+    NotifyRequest,
+    NotifyResponse,
     StatusResponse,
 )
 from app.models import APIKey, EventLog, RateLimit
@@ -104,5 +108,34 @@ def draft_route(
     return DraftResponse(action=result.action, draftBody=result.draftBody)
 
 
-# POST /public/notify (relay to Discord) is intentionally deferred until the
-# Discord integration ships in v2 — it would live here, trigger-scoped.
+@router.post("/notify", response_model=NotifyResponse)
+def notify_route(
+    request: Request,
+    body: NotifyRequest,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("trigger")),
+) -> NotifyResponse:
+    """Relay a short message to the committee's Discord channel. Trigger-scoped.
+
+    Sends no LLM spend, but it is an outbound side effect on a public surface, so
+    it carries the ``trigger`` scope (not ``read``) and the per-key request limit.
+    Returns 503 when no Discord webhook is configured, so a caller can tell "not
+    delivered because unconfigured" from a delivery failure. Every relay is logged
+    to EventLog for the dashboard audit trail.
+    """
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    if not settings.DISCORD_NOTIFY_WEBHOOK_URL:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Discord relay not configured (set DISCORD_NOTIFY_WEBHOOK_URL)",
+        )
+    delivered = notify_discord(body.message, username=body.username)
+    event_logging.log_event(
+        db,
+        source="notify",
+        action="discord_relay",
+        external_id=key.prefix,
+        output=body.message[:512],
+        classification="delivered" if delivered else "failed",
+    )
+    return NotifyResponse(delivered=delivered)

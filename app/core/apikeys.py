@@ -43,6 +43,15 @@ VALID_SCOPES = {
     # documents, links, projects, partners, people and meetings. These let it
     # hold exactly the access it uses.
     "read:games", "write:games",
+    # PII-heavy modules isolated so a key can be minted with exactly one of them
+    # instead of blanket read/write: the membership roster (names/emails/student
+    # ids from DUSA), committee people, and stored documents. A legacy read/write
+    # key still satisfies these (see `has_scope`), so tightening the routes below
+    # cannot lock out any key already issued. Members is read-only over the API
+    # (the roster is imported, never written here), so there is no write:members.
+    "read:members",
+    "read:people", "write:people",
+    "read:documents", "write:documents",
 }
 
 # Length of the human-facing prefix used for DB lookup, e.g. "dsec_live_a1b2c3d4".

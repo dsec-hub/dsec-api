@@ -30,10 +30,19 @@ from app.models import AppUser, OAuthAuthCode, OAuthClient, OAuthToken
 # (Sponsors, Finance) are carried as per-module scopes, never blanket read/write.
 SUPPORTED_SCOPES = ("read", "write", "trigger", "ingest")
 
-# Modules whose MCP tools are isolated behind per-module scopes (PHASE 2A). Every
-# other module stays "focus-only": represented by the legacy coarse read/write,
-# so the broad tools keep working unchanged.
-ENFORCED_MODULES = ("finance", "sponsors")
+# Modules whose MCP tools are isolated behind per-module scopes. Every other
+# module stays "focus-only": represented by the legacy coarse read/write, so the
+# broad tools keep working unchanged.
+#
+# members/people/documents were added when those routes moved to granular scopes:
+# without them here an OAuth grant for a role touching any of the three would fall
+# through to blanket `read`, which satisfies every read:* and so would defeat the
+# isolation for OAuth tokens. NOTE: a role that ALSO grants a focus-only module
+# (events, tasks, …) still receives blanket read/write, because those modules have
+# no granular scope — so full OAuth isolation of members/people/documents only
+# holds for a role scoped exclusively to enforced modules until the remaining
+# focus-only modules are rolled out too.
+ENFORCED_MODULES = ("finance", "sponsors", "members", "people", "documents")
 
 # Every gateable workspace module (mirrors dsec-hub ROLES.md). "admin" is a
 # superuser flag rather than a data module, so it is expanded to "all modules"

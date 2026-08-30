@@ -98,3 +98,35 @@ def archive_event(db: Session, event_id: int) -> Event | None:
     db.commit()
     db.refresh(event)
     return _attach_owners(db, event)
+
+
+def unarchive_event(db: Session, event_id: int) -> Event | None:
+    event = db.get(Event, event_id)
+    if event is None:
+        return None
+    event.archived = False
+    db.commit()
+    db.refresh(event)
+    return _attach_owners(db, event)
+
+
+def set_dusa_status(db: Session, event_id: int, status: str) -> Event | None:
+    """Set an event's DUSA submission status to a canonical value.
+
+    Returns the updated event, or None if the event does not exist. Raises
+    ValueError if ``status`` is not one of ``DUSA_STATUSES`` — the executor
+    validates first, but this is the last line of defence against an arbitrary
+    string reaching the column the dashboard kanban reads.
+    """
+    from app.features.events.dusa import normalize_dusa_status
+
+    canonical = normalize_dusa_status(status)
+    if canonical is None:
+        raise ValueError(f"invalid DUSA status: {status!r}")
+    event = db.get(Event, event_id)
+    if event is None:
+        return None
+    event.dusa_submission_status = canonical
+    db.commit()
+    db.refresh(event)
+    return _attach_owners(db, event)

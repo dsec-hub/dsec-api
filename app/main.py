@@ -21,6 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import require_basic_auth
 from app.config import settings, validate_production_settings
+from app.core.logconfig import configure_logging
 from app.db import run_migrations
 
 # Feature routers — each self-contained under features/<name>/router.py
@@ -56,7 +57,7 @@ from app.features.sponsors.router import router as sponsors_router
 from app.features.tasks.router import router as tasks_router
 from app.features.website.router import router as website_router
 
-logging.basicConfig(level=logging.INFO)
+configure_logging(log_format=settings.LOG_FORMAT, level=settings.LOG_LEVEL)
 _logger = logging.getLogger("dsec")
 
 

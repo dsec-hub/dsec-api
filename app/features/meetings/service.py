@@ -96,6 +96,16 @@ def archive_meeting(db: Session, meeting_id: int) -> Meeting | None:
     return meeting
 
 
+def unarchive_meeting(db: Session, meeting_id: int) -> Meeting | None:
+    meeting = db.get(Meeting, meeting_id)
+    if meeting is None:
+        return None
+    meeting.archived = False
+    db.commit()
+    db.refresh(meeting)
+    return meeting
+
+
 # --------------------------------------------------------------------------- #
 # Pre-meeting agenda
 # --------------------------------------------------------------------------- #

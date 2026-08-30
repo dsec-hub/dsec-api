@@ -104,6 +104,20 @@ def archive_meeting(
     return MeetingOut.model_validate(meeting)
 
 
+@router.post("/{meeting_id}/unarchive", response_model=MeetingOut)
+def unarchive_meeting(
+    meeting_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> MeetingOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    meeting = service.unarchive_meeting(db, meeting_id)
+    if meeting is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found")
+    return MeetingOut.model_validate(meeting)
+
+
 # --------------------------------------------------------------------------- #
 # Pre-meeting agenda (built before the meeting, shared read-only with invitees)
 # --------------------------------------------------------------------------- #
