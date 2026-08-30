@@ -181,3 +181,28 @@ def test_page_preview_token_defaults_to_page_ttl():
     # Within a small window of now + PAGE_PREVIEW_TTL, and far below EVENT_PREVIEW_TTL.
     assert abs(exp - (before + settings.PAGE_PREVIEW_TTL)) <= 5
     assert exp < before + settings.EVENT_PREVIEW_TTL
+
+
+def test_preview_does_not_persist_synthesised_slug(client, db):
+    """NEW-APIROUTERS-09: previewing a slug-less draft must not write a slug onto
+    the session-managed row (a future commit would otherwise persist it)."""
+    from app.db import SessionLocal
+
+    doc = models.Document(title="Draft", type="Page", slug=None,
+                          content_json=_blocks(), archived=False)
+    db.add(doc)
+    db.commit()
+    doc_id = doc.id
+
+    token = make_page_preview_token(doc_id)
+    resp = client.get(f"/website/pages/preview/{token}")
+    assert resp.status_code == 200
+    assert resp.json()["slug"] == f"preview-{doc_id}"  # synthesised for the layout
+
+    # A brand-new session reads the actual DB row — its slug must still be NULL.
+    fresh = SessionLocal()
+    try:
+        row = fresh.get(models.Document, doc_id)
+        assert row.slug is None
+    finally:
+        fresh.close()
