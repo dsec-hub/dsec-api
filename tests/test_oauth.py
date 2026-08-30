@@ -517,6 +517,67 @@ def test_refresh_never_widens_beyond_original_grant(client, user, monkeypatch):
     assert "ingest" not in got and "read:finance" not in got
 
 
+# --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-04: consent-page destination + client revocation
+# --------------------------------------------------------------------------- #
+
+_ADMIN_BASIC = ("admin", "test-dashboard-pass")  # conftest DASHBOARD_USER / _PASS
+
+
+def test_consent_page_names_untrusted_host_and_warns(client):
+    """The callback host is shown, and an untrusted host (default claude.ai is not
+    on the allowlist) triggers the 'not verified' warning above the form."""
+    reg = _register(client)  # redirect on claude.ai
+    _, challenge = _pkce()
+    g = _authorize_get(client, client_id=reg["client_id"], redirect_uri=reg["redirect_uris"][0], challenge=challenge)
+    assert g.status_code == 200
+    assert "claude.ai" in g.text
+    assert "DSEC has not verified this application" in g.text
+
+
+def test_consent_page_trusted_host_has_no_warning(client):
+    reg = _register(client, redirect_uris=["https://hub.dsec.club/callback"])
+    _, challenge = _pkce()
+    g = _authorize_get(client, client_id=reg["client_id"], redirect_uri=reg["redirect_uris"][0], challenge=challenge)
+    assert g.status_code == 200
+    assert "hub.dsec.club" in g.text
+    assert "has not verified" not in g.text
+
+
+def test_admin_oauth_clients_requires_basic_auth(client):
+    _register(client)
+    assert client.get("/admin/oauth/clients").status_code == 401
+    listed = client.get("/admin/oauth/clients", auth=_ADMIN_BASIC)
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["revoked"] is False
+    assert listed.json()[0]["first_seen_ip"]  # captured at registration
+
+
+def test_revoked_client_rejected_at_authorize_and_token(client, user):
+    cid, code, verifier = _full_authorize(client, user)  # works while active
+    # Revoke the client (basic-auth admin).
+    assert client.get("/admin/oauth/clients/xxx/revoke").status_code in (401, 405)
+    rev = client.post(f"/admin/oauth/clients/{cid}/revoke", auth=_ADMIN_BASIC)
+    assert rev.status_code == 200 and rev.json()["revoked"] is True
+    # Idempotent.
+    assert client.post(f"/admin/oauth/clients/{cid}/revoke", auth=_ADMIN_BASIC).json()["revoked"] is True
+
+    # /oauth/authorize now treats it as unknown.
+    _, challenge = _pkce()
+    g = client.get("/oauth/authorize", params={
+        "response_type": "code", "client_id": cid, "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    }, follow_redirects=False)
+    assert g.status_code == 400 and "Unknown application" in g.text
+
+    # /oauth/token rejects the (already-issued) code because the client is gone.
+    t = client.post("/oauth/token", data={
+        "grant_type": "authorization_code", "code": code, "client_id": cid, "code_verifier": verifier,
+    })
+    assert t.status_code == 401 and t.json()["error"] == "invalid_client"
+
+
 def test_admin_role_can_grant_ingest(client, db):
     pw = bcrypt.hashpw(b"adminpass-adminpass", bcrypt.gensalt(rounds=4)).decode()
     db.add(AppUser(email="admin@dsec.club", name="Admin", password_hash=pw, role="admin", is_active=True))

@@ -29,7 +29,7 @@ from app.features.archive.service import build_export_bundle
 from app.features.mcp.auth import has_scope
 from app.core.ratelimit import limiter
 from app.db import get_db
-from app.models import APIKey, RateLimit
+from app.models import APIKey, OAuthClient, RateLimit
 
 router = APIRouter()
 
@@ -186,6 +186,54 @@ def revoke_key(
     db.commit()
     db.refresh(row)
     return KeyInfo.model_validate(row)
+
+
+class OAuthClientInfo(BaseModel):
+    id: int
+    client_id: str
+    client_name: str | None = None
+    redirect_uris: list[str] = Field(default_factory=list)
+    scope: str | None = None
+    created_at: datetime
+    last_used_at: datetime | None = None
+    first_seen_ip: str | None = None
+    revoked: bool
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/oauth/clients", response_model=list[OAuthClientInfo])
+def list_oauth_clients(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_basic_auth),
+) -> list[OAuthClientInfo]:
+    """List every registered OAuth client (newest first), incl. revoked ones, so
+    the committee can see and cull self-registered MCP clients (NEW-APIROUTERS-04).
+    """
+    rows = db.execute(
+        select(OAuthClient).order_by(OAuthClient.created_at.desc())
+    ).scalars().all()
+    return [OAuthClientInfo.model_validate(r) for r in rows]
+
+
+@router.post("/oauth/clients/{client_id}/revoke", response_model=OAuthClientInfo)
+def revoke_oauth_client(
+    client_id: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_basic_auth),
+) -> OAuthClientInfo:
+    """Revoke a client so it disappears from every OAuth read path. Idempotent —
+    revoking an already-revoked client is a no-op. Queries the table directly (not
+    service.get_client, which now hides revoked clients)."""
+    row = db.execute(
+        select(OAuthClient).where(OAuthClient.client_id == client_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
+    row.revoked = True
+    db.commit()
+    db.refresh(row)
+    return OAuthClientInfo.model_validate(row)
 
 
 @router.get("/cron/prune-rate-limit")

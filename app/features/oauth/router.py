@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core.net import client_ip
 from app.core.ratelimit import limiter
 from app.core.usage import log_usage
@@ -124,6 +125,7 @@ async def register(request: Request, db: Session = Depends(get_db)) -> JSONRespo
         response_types=[str(r) for r in response_types][:8],
         token_endpoint_auth_method=auth_method,
         scope=" ".join(sorted(set(pool))),
+        first_seen_ip=client_ip(request),
     )
     out = {
         "client_id": client.client_id,
@@ -186,6 +188,13 @@ def _append_query(uri: str, params: dict) -> str:
     return urlunparse(parts._replace(query=urlencode(q)))
 
 
+def _redirect_host_trust(redirect_uri: str) -> tuple[str, bool]:
+    """(host, trusted) for the consent page (NEW-APIROUTERS-04). ``trusted`` is
+    whether the redirect host is on ``settings.oauth_trusted_redirect_hosts``."""
+    host = (urlparse(redirect_uri).hostname or "").lower()
+    return host, host in settings.oauth_trusted_redirect_hosts
+
+
 def _redirect_error(uri: str, error: str, state: str | None, desc: str | None = None) -> RedirectResponse:
     params = {"error": error, "state": state}
     if desc:
@@ -206,6 +215,9 @@ def authorize_get(
     resource: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
+    # NEW-APIROUTERS-04: rate-limit the consent page like every other
+    # unauthenticated route (it was the one that had no limiter.check_request).
+    limiter.check_request(db, key_id=None, ip=client_ip(request))
     client = service.get_client(db, client_id or "")
     if client is None:
         return HTMLResponse(
@@ -235,7 +247,11 @@ def authorize_get(
         "code_challenge_method": code_challenge_method,
         "resource": resource,
     })
-    html = pages.render_consent(req_token=req_token, client_name=client.client_name, scopes=scopes)
+    host, trusted = _redirect_host_trust(redirect_uri)
+    html = pages.render_consent(
+        req_token=req_token, client_name=client.client_name, scopes=scopes,
+        redirect_host=host, trusted=trusted,
+    )
     return HTMLResponse(html, headers=_FRAME_GUARD)
 
 
@@ -312,9 +328,11 @@ def _consent_again(payload: dict, client, error: str) -> HTMLResponse:
         "code_challenge_method": payload.get("code_challenge_method", "S256"),
         "resource": payload.get("resource"),
     })
+    host, trusted = _redirect_host_trust(payload["redirect_uri"])
     html = pages.render_consent(
         req_token=req_token, client_name=client.client_name,
-        scopes=payload["scope"].split(), error=error,
+        scopes=payload["scope"].split(), redirect_host=host, trusted=trusted,
+        error=error,
     )
     return HTMLResponse(html, status_code=200, headers=_FRAME_GUARD)
 

@@ -139,6 +139,24 @@ class Settings(BaseSettings):
     OAUTH_AUTH_CODE_TTL: int = 600  # authorization-code lifetime (10 minutes)
     OAUTH_ACCESS_TOKEN_PREFIX: str = "dsec_at_"
     OAUTH_REFRESH_TOKEN_PREFIX: str = "dsec_rt_"
+    # Redirect-URI hosts DSEC vouches for on the consent page (NEW-APIROUTERS-04).
+    # Open Dynamic Client Registration lets anyone register a client with any
+    # https callback and any display name, so the consent page names the callback
+    # host and warns "DSEC has not verified this application" for any host NOT in
+    # this comma-separated allowlist. Add the club's genuine MCP client callback
+    # hosts (e.g. claude.ai) here so real connections don't show the warning.
+    OAUTH_TRUSTED_REDIRECT_HOSTS: str = (
+        "dsec.club,www.dsec.club,hub.dsec.club,localhost,127.0.0.1"
+    )
+
+    @property
+    def oauth_trusted_redirect_hosts(self) -> set[str]:
+        """OAUTH_TRUSTED_REDIRECT_HOSTS parsed to a lower-cased set of hosts."""
+        return {
+            h.strip().lower()
+            for h in self.OAUTH_TRUSTED_REDIRECT_HOSTS.split(",")
+            if h.strip()
+        }
 
     # --- MCP transport security (DNS-rebinding protection) ---
     # The MCP SDK auto-enables a localhost-only Host allowlist, which 421s every

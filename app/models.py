@@ -1523,6 +1523,14 @@ class OAuthClient(Base):
     token_endpoint_auth_method: Mapped[str] = mapped_column(
         String(32), default="none", server_default="none"
     )
+    # NEW-APIROUTERS-04: DCR is open by design, so a malicious client can't be
+    # blocked at registration — it must be revocable afterwards. get_client filters
+    # on revoked, so a revoked client is invisible to /oauth/authorize and
+    # /oauth/token. first_seen_ip records the registering caller for triage.
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), index=True
+    )
+    first_seen_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

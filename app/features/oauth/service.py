@@ -123,8 +123,14 @@ def verify_pkce(verifier: str, challenge: str, method: str) -> bool:
 def get_client(db: Session, client_id: str) -> OAuthClient | None:
     if not client_id:
         return None
+    # NEW-APIROUTERS-04: a revoked client is treated as if it does not exist, so
+    # /oauth/authorize shows "Unknown application" and /oauth/token rejects it.
+    # This is the ONLY read path for OAuthClient, so the filter covers every use.
     return db.execute(
-        select(OAuthClient).where(OAuthClient.client_id == client_id)
+        select(OAuthClient).where(
+            OAuthClient.client_id == client_id,
+            OAuthClient.revoked.is_(False),
+        )
     ).scalar_one_or_none()
 
 
@@ -147,6 +153,7 @@ def register_client(
     response_types: list[str],
     token_endpoint_auth_method: str,
     scope: str | None,
+    first_seen_ip: str | None = None,
 ) -> tuple[OAuthClient, str | None]:
     """Create a client (RFC 7591). Returns (row, raw_secret_or_None)."""
     client_id = "dsec_client_" + secrets.token_urlsafe(16)
@@ -164,6 +171,7 @@ def register_client(
         response_types=response_types,
         token_endpoint_auth_method=token_endpoint_auth_method,
         scope=scope,
+        first_seen_ip=first_seen_ip,  # NEW-APIROUTERS-04: who registered it
     )
     db.add(row)
     db.commit()
