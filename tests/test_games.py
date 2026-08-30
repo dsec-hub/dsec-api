@@ -239,11 +239,12 @@ def test_draw_roll_up_picks_highest_member_points(db):
     # the non-member is absent from the members-only draw standings
     assert "Guest" not in [s["display_name"] for s in rolled["standings"]]
 
-    cycle = draws.close_cycle(db, period)
+    # period is the current (not-yet-ended) month, so an honest close needs force.
+    cycle = draws.close_cycle(db, period, force=True)
     assert cycle.status == "closed"
     winner_player = db.get(models.GamePlayer, cycle.winner_player_id)
     assert winner_player.account_id == 20  # Ada
-    # idempotent
+    # idempotent — an already-closed cycle is returned unchanged, force or not
     again = draws.close_cycle(db, period)
     assert again.winner_player_id == cycle.winner_player_id
 
@@ -328,17 +329,64 @@ def test_cron_close_draw_route(client, rw_key, db, monkeypatch):
         headers=_h(rw_key),
     )
     period = draws.cycle_key(datetime.now(timezone.utc))
+    hdr = {"Authorization": "Bearer test-cron"}
     # Wrong / missing secret is rejected (Vercel Cron sends Authorization: Bearer).
     assert client.get(f"/games/cron/close-draw?period_key={period}").status_code == 401
-    # The real cron call closes the cycle and names the winner.
+    # The current month has not ended: closing it without force is refused (409),
+    # and the cycle stays open.
+    assert client.get(
+        f"/games/cron/close-draw?period_key={period}", headers=hdr
+    ).status_code == 409
+    assert draws.get_or_create_open_cycle(db, period).status == "open"
+    # force=true closes it early and names the winner.
     r = client.get(
-        f"/games/cron/close-draw?period_key={period}",
-        headers={"Authorization": "Bearer test-cron"},
+        f"/games/cron/close-draw?period_key={period}&force=true", headers=hdr
     )
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "closed"
     assert body["winner_player_id"] is not None
+    # A successful close is audited.
+    ev = db.execute(
+        select(models.EventLog).where(
+            models.EventLog.source == "games",
+            models.EventLog.action == "draw_closed",
+            models.EventLog.external_id == period,
+        )
+    ).scalars().first()
+    assert ev is not None
+    assert ev.payload["winner_player_id"] == body["winner_player_id"]
+
+
+def test_draw_routes_reject_invalid_period_key(client, ro_key, db):
+    """A malformed period_key is a 422 and must not persist a DrawCycle row."""
+    for bad in ("abc", "2026", "2026-08-01", "2026-13"):
+        r = client.get(f"/games/draw?period_key={bad}", headers=_h(ro_key))
+        assert r.status_code == 422, (bad, r.text)
+    assert db.execute(select(models.DrawCycle)).scalars().first() is None
+
+
+def test_cron_close_draw_rejects_invalid_period_key(client, db, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "CRON_SECRET", "test-cron")
+    hdr = {"Authorization": "Bearer test-cron"}
+    r = client.get("/games/cron/close-draw?period_key=abc", headers=hdr)
+    assert r.status_code == 422, r.text
+    assert db.execute(select(models.DrawCycle)).scalars().first() is None
+
+
+def test_cron_close_draw_defaults_to_prev_month(client, db, monkeypatch):
+    """The real monthly cron omits period_key: it closes the month that just
+    ended (which HAS ended), so no force is needed."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "CRON_SECRET", "test-cron")
+    r = client.get(
+        "/games/cron/close-draw", headers={"Authorization": "Bearer test-cron"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "closed"
 
 
 def test_list_games_and_leaderboard_endpoints(client, ro_key, rw_key):

@@ -76,6 +76,11 @@ def get_draw(
     wins. Powers the gift-card note on the leaderboard page."""
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     pk = period_key or draws.cycle_key(datetime.now(timezone.utc))
+    if not draws.is_valid_period_key(pk):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "period_key must be a YYYY-MM month, e.g. 2026-08",
+        )
     cycle = draws.get_or_create_open_cycle(db, pk)
     return {
         "period_key": pk,
@@ -89,16 +94,28 @@ def get_draw(
 def cron_close_draw(
     request: Request,
     period_key: str | None = None,
+    force: bool = False,
     db: Session = Depends(get_db),
     _: None = Depends(require_cron_secret),
 ) -> dict:
     """Close a draw cycle and open the next. Defaults to the month that just
     ended. Idempotent. Triggered monthly by Vercel Cron, which sends a GET with
-    `Authorization: Bearer <CRON_SECRET>` (the gate is the secret, not the verb)."""
+    `Authorization: Bearer <CRON_SECRET>` (the gate is the secret, not the verb).
+
+    Refuses (409) to close a period that has not ended yet; pass `force=true` to
+    close early."""
     limiter.check_request(db, key_id=None, ip=client_ip(request))
     now = datetime.now(timezone.utc)
     pk = period_key or draws.prev_cycle_key(now)
-    cycle = draws.close_cycle(db, pk)
+    if not draws.is_valid_period_key(pk):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "period_key must be a YYYY-MM month, e.g. 2026-08",
+        )
+    try:
+        cycle = draws.close_cycle(db, pk, force=force)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     return {
         "period_key": cycle.period_key,
         "status": cycle.status,
