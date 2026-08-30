@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -37,8 +38,8 @@ class EventBase(BaseModel):
     # Flagship marketing event: the flag, the template theme, the secret→reveal
     # state, and the teaser-state copy/countdown. See models.Event / the contract.
     is_flagship: bool | None = None
-    flagship_theme: str | None = None       # arena|blueprint|nightrun
-    flagship_state: str | None = None       # teaser|revealed
+    flagship_theme: Literal["arena", "blueprint", "nightrun"] | None = None
+    flagship_state: Literal["teaser", "revealed"] | None = None
     flagship_teaser_title: str | None = None
     flagship_teaser_body: str | None = None
     flagship_reveal_at: datetime | None = None

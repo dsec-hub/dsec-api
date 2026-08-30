@@ -12,6 +12,8 @@ runs fine on serverless.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -299,7 +301,8 @@ def create_event(name: str, type: str | None = None, status: str | None = None,
                  dusa_submission_status: str | None = None, support_types: list[str] | None = None,
                  partner_org: str | None = None, related_sponsor_id: int | None = None,
                  is_public: bool | None = None, is_flagship: bool | None = None,
-                 flagship_theme: str | None = None, flagship_state: str | None = None,
+                 flagship_theme: Literal["arena", "blueprint", "nightrun"] | None = None,
+                 flagship_state: Literal["teaser", "revealed"] | None = None,
                  flagship_teaser_title: str | None = None, flagship_teaser_body: str | None = None,
                  flagship_reveal_at: str | None = None,
                  co_owner_ids: list[int] | None = None) -> dict:
@@ -350,7 +353,8 @@ def update_event(event_id: int, name: str | None = None, type: str | None = None
                  dusa_submission_status: str | None = None, support_types: list[str] | None = None,
                  partner_org: str | None = None, related_sponsor_id: int | None = None,
                  is_public: bool | None = None, is_flagship: bool | None = None,
-                 flagship_theme: str | None = None, flagship_state: str | None = None,
+                 flagship_theme: Literal["arena", "blueprint", "nightrun"] | None = None,
+                 flagship_state: Literal["teaser", "revealed"] | None = None,
                  flagship_teaser_title: str | None = None, flagship_teaser_body: str | None = None,
                  flagship_reveal_at: str | None = None,
                  co_owner_ids: list[int] | None = None) -> dict:

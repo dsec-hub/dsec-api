@@ -468,6 +468,77 @@ def test_flagship_signup_rejects_overlong_company(client):
 
 
 # --------------------------------------------------------------------------- #
+# NEW-APIROUTERS-05: flagship redaction fails closed + constrained flagship_state
+# --------------------------------------------------------------------------- #
+
+def _make_flagship(client, db, rw_key, name, bad_state):
+    """Create a published flagship event, then set an out-of-range flagship_state
+    directly through the ORM (the API schema would now reject it — which is the
+    point: that is how a bad value arrives from dsec-hub's own Drizzle schema)."""
+    ev = client.post("/events-api", json={
+        "name": name, "start_date": "2099-12-01", "is_public": True,
+        "is_flagship": True, "flagship_theme": "nightrun", "flagship_state": "teaser",
+        "description": "TOP SECRET", "venue": "The Bunker",
+        "ticket_url": "https://t.example/x",
+    }, headers=_h(rw_key)).json()
+    row = db.get(models.Event, ev["id"])
+    row.flagship_state = bad_state
+    db.commit()
+    feed = client.get("/website/events").json()
+    slug = next(e["slug"] for e in feed if e["title"] == name)
+    return client.get(f"/website/events/{slug}").json()
+
+
+def test_flagship_capital_teaser_is_redacted(client, db, rw_key):
+    page = _make_flagship(client, db, rw_key, "Duckshot Cap", "Teaser")
+    assert page["description"] is None
+    assert page["venue"] is None
+    assert page["ticket_url"] is None
+
+
+def test_flagship_unknown_state_is_redacted(client, db, rw_key):
+    page = _make_flagship(client, db, rw_key, "Duckshot Draft", "draft")
+    assert page["description"] is None
+    assert page["venue"] is None
+    assert page["ticket_url"] is None
+
+
+def test_patch_event_rejects_bad_flagship_state(client, db, rw_key):
+    eid = client.post("/events-api", json={"name": "E", "start_date": "2099-12-01"},
+                      headers=_h(rw_key)).json()["id"]
+    assert client.patch(f"/events-api/{eid}", json={"flagship_state": "Teaser"},
+                        headers=_h(rw_key)).status_code == 422
+
+
+def test_patch_event_rejects_bad_flagship_theme(client, db, rw_key):
+    eid = client.post("/events-api", json={"name": "E2", "start_date": "2099-12-01"},
+                      headers=_h(rw_key)).json()["id"]
+    assert client.patch(f"/events-api/{eid}", json={"flagship_theme": "nonsense"},
+                        headers=_h(rw_key)).status_code == 422
+
+
+def test_mcp_event_tools_constrain_flagship_fields():
+    """The create/update event tool signatures accept only the legal values."""
+    import inspect
+    from typing import Literal, get_args, get_origin
+    from app.features.mcp import server as mcpserver
+
+    def _literal_values(annotation):
+        # `X | None` under `from __future__ import annotations` → resolved via
+        # eval_str; pick the Literal arm and return its values.
+        for arm in get_args(annotation):
+            if get_origin(arm) is Literal:
+                return set(get_args(arm))
+        return set()
+
+    for tool in (mcpserver.create_event, mcpserver.update_event):
+        # eval_str resolves the PEP 563 string annotations to real types.
+        params = inspect.signature(tool, eval_str=True).parameters
+        assert _literal_values(params["flagship_state"].annotation) == {"teaser", "revealed"}
+        assert _literal_values(params["flagship_theme"].annotation) == {"arena", "blueprint", "nightrun"}
+
+
+# --------------------------------------------------------------------------- #
 # Event preview links ("see it before publishing")
 # --------------------------------------------------------------------------- #
 

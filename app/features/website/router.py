@@ -357,7 +357,10 @@ def _public_event(
     # revealed flagship — exposes everything as normal.
     flagship = bool(getattr(e, "is_flagship", False))
     state = (e.flagship_state or "teaser") if flagship else None
-    if flagship and state == "teaser":
+    # Fail CLOSED: anything that is not exactly "revealed" is treated as still
+    # secret. A typo, a stray capital or a value from some future state must
+    # never publish the specifics.
+    if flagship and state != "revealed":
         description = None
         venue = None
         ticket_url = None
