@@ -149,11 +149,27 @@ def test_parse_pnl_skips_decoy_headers_and_balances():
     assert p.opening_balance == 1970.09
     assert p.total_income == 175.00       # -(−75 − 100)
     assert p.total_expense == 576.71      # 113.98 + 462.73
-    assert p.closing_balance == 1568.38   # opening + income − expense
-    assert p.closing_balance == round(p.opening_balance + p.total_income - p.total_expense, 2)
+    assert p.closing_balance == 1568.38   # opening + income − expense (+ other)
+    assert p.other_total == 0.0           # _SAMPLE_TX has no unbucketed line
+    assert p.closing_balance == round(
+        p.opening_balance + p.total_income - p.total_expense + p.other_total, 2
+    )
     # sign convention + derived fields preserved
     income = next(t for t in p.transactions if t["gl_account_no"] == "4006")
     assert income["amount"] == -100.00 and income["kind"] == "income" and income["amount_abs"] == 100.00
+
+
+def test_parse_pnl_reconciles_when_an_unbucketed_account_appears():
+    # A 7010 (asset) line lands in the "other" bucket: it counts toward
+    # closing_balance (the bank position) but none of income/expense, so the
+    # components only reconcile once other_total is included.
+    extra = (date(2026, 5, 1), "PPI-099999", 7010, "Asset Purchase", "Laptop", 210, "BW DSEC", 500.00)
+    p = parse_pnl(build_pnl_xlsx(transactions=_SAMPLE_TX + [extra]))
+    assert p.other_total == -500.00
+    assert p.closing_balance == 1068.38
+    assert p.closing_balance == round(
+        p.opening_balance + p.total_income - p.total_expense + p.other_total, 2
+    )
 
 
 # ---------------------------------------------------------------------------

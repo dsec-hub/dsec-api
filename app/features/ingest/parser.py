@@ -15,11 +15,14 @@ Two shapes:
 from __future__ import annotations
 
 import io
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from openpyxl import load_workbook
+
+log = logging.getLogger(__name__)
 
 # Excel's 1900 date system counts days from this epoch (accounts for the
 # historical 1900-leap-year bug by using Dec 30 1899).
@@ -189,6 +192,7 @@ class PnLParse:
     opening_balance: float = 0.0
     total_income: float = 0.0
     total_expense: float = 0.0
+    other_total: float = 0.0
     closing_balance: float = 0.0
     fy_start: date | None = None
 
@@ -231,6 +235,13 @@ def parse_pnl(data: bytes) -> PnLParse:
     out.total_expense = round(
         sum(t["amount"] for t in out.transactions if _acct_kind(t["gl_account_no"]) == "expense"), 2
     )
+    # Fourth bucket: anything that is not 3/4/6/8xxx (a 5/7/9xxx line or a
+    # non-numeric code). Same -sum convention as opening/income (DUSA exports
+    # income negative), so the four components reconcile with the bank position:
+    #   closing = opening + income - expense + other
+    out.other_total = round(
+        -sum(t["amount"] for t in out.transactions if _acct_kind(t["gl_account_no"]) == "other"), 2
+    )
     out.closing_balance = round(-sum(t["amount"] for t in out.transactions), 2)
     return out
 
@@ -257,6 +268,9 @@ def _parse_tx_row(row: list, col_field: dict[int, str]) -> dict | None:
     return rec
 
 
+_WARNED_ACCT_PREFIXES: set[str] = set()
+
+
 def _acct_kind(gl_account_no: str | None) -> str:
     """DUSA chart of accounts: 3xxx balance/reserve, 4xxx & 8xxx income, 6xxx expense."""
     if not gl_account_no:
@@ -268,6 +282,13 @@ def _acct_kind(gl_account_no: str | None) -> str:
         return "income"
     if head == "6":
         return "expense"
+    # An account we don't recognise still counts toward closing_balance via
+    # other_total; leave a trace so a divergence isn't silent. Never raise — one
+    # odd line must not fail the whole weekly finance import. Deduped per prefix
+    # so a run doesn't spam (this is called several times per transaction).
+    if head not in _WARNED_ACCT_PREFIXES:
+        _WARNED_ACCT_PREFIXES.add(head)
+        log.warning("ingest: gl account %r has no known bucket (not 3/4/6/8xxx)", gl_account_no)
     return "other"
 
 
