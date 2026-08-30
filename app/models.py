@@ -91,6 +91,12 @@ class APIKey(Base):
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # SEC-06 deploy-3: the key that minted this one via POST /admin/keys/self.
+    # NULL for owner/service keys. Revoking a parent cascades to its children (see
+    # admin.revoke_key), closing the "child key survives parent revocation" hole.
+    parent_key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_key.id"), index=True, nullable=True
+    )
 
 
 class RateLimit(Base):

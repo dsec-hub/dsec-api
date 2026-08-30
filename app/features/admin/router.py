@@ -9,14 +9,16 @@ also mounted under /admin.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_basic_auth, require_cron_secret
+from app.config import settings
 from app.core.apikeys import (
     VALID_SCOPES,
     default_key_expiry,
@@ -32,6 +34,11 @@ from app.db import get_db
 from app.models import APIKey, OAuthClient, RateLimit
 
 router = APIRouter()
+
+# SEC-06 deploy-3: dsec-app scopes a user's own keys with an "appuser:<id>" owner
+# label, and the hub's list/revoke UI keys off it. Validate the shape instead of
+# trusting or removing it — an owner that isn't appuser:<digits> is rejected.
+_OWNER_RE = re.compile(r"^appuser:\d+$")
 
 
 class CreateKeyRequest(BaseModel):
@@ -115,6 +122,11 @@ def self_create_key(
     req: SelfKeyRequest,
     request: Request,
     db: Session = Depends(get_db),
+    # SEC-06 deploy-3: this stays on require_api_key() (no required scope) FOR NOW.
+    # Gating it behind a dedicated scope is the OWNER's step and MUST come AFTER
+    # dsec-hub's LIVE DSEC_API_KEY row is granted that scope, or the hub loses the
+    # ability to mint tokens. The containment landing here (owner-label validation,
+    # cascade revocation, per-caller cap) is safe without that grant.
     caller: APIKey = Depends(require_api_key()),
 ) -> CreateKeyResponse:
     """Mint a key on behalf of a dashboard user (called by dsec-app's server).
@@ -126,6 +138,30 @@ def self_create_key(
     may request) before calling this; this endpoint is the second gate.
     """
     limiter.check_request(db, key_id=caller.id, ip=client_ip(request))
+    # SEC-06 deploy-3: the owner label is trusted by the hub's list/revoke UI, so
+    # validate its shape (appuser:<id>) rather than accepting any string. Do NOT
+    # remove the field — dropping it breaks that UI (api-tokens.ts:98,126).
+    if not _OWNER_RE.match(req.owner or ""):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="owner must match 'appuser:<id>'",
+        )
+    # SEC-06 deploy-3: bound how many outstanding (non-revoked) child keys one
+    # caller may hold, so a leaked service key can't mint an unbounded persistent
+    # fleet. The per-minute throttle is not a key-count limit.
+    outstanding = db.execute(
+        select(func.count())
+        .select_from(APIKey)
+        .where(APIKey.parent_key_id == caller.id, APIKey.revoked.is_(False))
+    ).scalar_one()
+    if outstanding >= settings.SELF_KEY_MAX_OUTSTANDING:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"outstanding child-key limit reached "
+                f"({settings.SELF_KEY_MAX_OUTSTANDING}); revoke unused keys first"
+            ),
+        )
     requested = set(req.scopes)
     invalid = requested - VALID_SCOPES
     if invalid:
@@ -151,6 +187,7 @@ def self_create_key(
         scopes=sorted(requested),
         created_by=req.owner,
         expires_at=default_key_expiry(),  # SEC-07c: new keys expire in 180 days
+        parent_key_id=caller.id,  # SEC-06 deploy-3: lineage for cascade revocation
     )
     db.add(row)
     db.commit()
@@ -183,6 +220,22 @@ def revoke_key(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="key not found")
     row.revoked = True  # soft-revoke; never hard-delete (keep the audit trail)
+    # SEC-06 deploy-3: cascade to every descendant minted via /keys/self, so a
+    # child (or grandchild) key can't outlive the revocation of its parent. BFS
+    # over parent_key_id; soft-revoke each, keeping the audit trail.
+    frontier = [row.id]
+    seen = {row.id}
+    while frontier:
+        children = db.execute(
+            select(APIKey).where(APIKey.parent_key_id.in_(frontier))
+        ).scalars().all()
+        frontier = []
+        for child in children:
+            if child.id in seen:
+                continue  # guard against any accidental cycle
+            seen.add(child.id)
+            child.revoked = True
+            frontier.append(child.id)
     db.commit()
     db.refresh(row)
     return KeyInfo.model_validate(row)

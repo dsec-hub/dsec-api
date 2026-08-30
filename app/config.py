@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     # X-Real-IP — see app/core/net.py.
     RATE_LIMIT_PER_IP_PER_MIN: int = 120
     MAX_REQUEST_BYTES: int = 100_000
+    # SEC-06 deploy-3: cap on OUTSTANDING (non-revoked) child keys a single caller
+    # (service key) may have minted via POST /admin/keys/self. The per-minute
+    # throttle is not a key-count limit, so without this a leaked service key could
+    # mint an unbounded number of persistent child keys. Generous for legitimate
+    # per-user minting; revoking children frees the budget back up.
+    SELF_KEY_MAX_OUTSTANDING: int = 50
 
     # --- Member verification cards (digital membership card in the portal) ---
     # The member portal shows each verified member a "membership card" with a

@@ -191,3 +191,77 @@ def test_calcom_webhook_fails_closed_in_production_via_app_env(client, monkeypat
     monkeypatch.setattr(settings, "APP_ENV", "production")
     resp = client.post("/calcom/webhook", json={"triggerEvent": "BOOKING_CREATED"})
     assert resp.status_code == 503
+
+
+# --- SEC-06: member-card scope registered; child-key minting is contained ------
+
+_ADMIN_BASIC = ("admin", "test-dashboard-pass")  # conftest DASHBOARD_USER / _PASS
+
+
+def _make_key(db, scopes, name="svc"):
+    from app import models
+    from app.core.apikeys import generate_key
+
+    gen = generate_key()
+    db.add(models.APIKey(name=name, prefix=gen.prefix, key_hash=gen.key_hash, scopes=scopes))
+    db.commit()
+    return gen.raw_key
+
+
+def _h(raw):
+    return {"Authorization": f"Bearer {raw}"}
+
+
+def test_read_membercard_scope_is_registered():
+    from app.core.apikeys import VALID_SCOPES
+
+    assert "read:membercard" in VALID_SCOPES
+
+
+def test_self_mint_rejects_bad_owner_label(client, db):
+    svc = _make_key(db, ["read", "write"])
+    r = client.post("/admin/keys/self",
+                    json={"name": "k", "scopes": ["read"], "owner": "not-an-appuser"},
+                    headers=_h(svc))
+    assert r.status_code == 400
+    # A valid appuser:<id> label still works.
+    ok = client.post("/admin/keys/self",
+                     json={"name": "k", "scopes": ["read"], "owner": "appuser:12"},
+                     headers=_h(svc))
+    assert ok.status_code == 200
+
+
+def test_self_mint_enforces_outstanding_child_cap(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "SELF_KEY_MAX_OUTSTANDING", 1)
+    svc = _make_key(db, ["read", "write"])
+    first = client.post("/admin/keys/self",
+                        json={"name": "a", "scopes": ["read"], "owner": "appuser:1"},
+                        headers=_h(svc))
+    assert first.status_code == 200
+    second = client.post("/admin/keys/self",
+                         json={"name": "b", "scopes": ["read"], "owner": "appuser:1"},
+                         headers=_h(svc))
+    assert second.status_code == 429
+
+
+def test_revoking_parent_cascades_to_child_keys(client, db):
+    from sqlalchemy import select
+
+    from app import models
+
+    svc = _make_key(db, ["read", "write"])
+    parent = db.execute(
+        select(models.APIKey).where(models.APIKey.name == "svc")
+    ).scalar_one()
+    child = client.post("/admin/keys/self",
+                        json={"name": "child", "scopes": ["read"], "owner": "appuser:1"},
+                        headers=_h(svc))
+    assert child.status_code == 200
+    child_id = child.json()["id"]
+    assert db.get(models.APIKey, child_id).parent_key_id == parent.id
+
+    # Revoke the parent → the child must be revoked too.
+    r = client.post(f"/admin/keys/{parent.id}/revoke", auth=_ADMIN_BASIC)
+    assert r.status_code == 200 and r.json()["revoked"] is True
+    db.expire_all()
+    assert db.get(models.APIKey, child_id).revoked is True

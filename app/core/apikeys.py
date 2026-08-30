@@ -52,6 +52,18 @@ VALID_SCOPES = {
     "read:members",
     "read:people", "write:people",
     "read:documents", "write:documents",
+    # SEC-06 deploy-2 (additive now, ENFORCED later by the owner). The digital
+    # membership-card endpoint (GET /members/{id}/verification-code) returns any
+    # member's door-scan code + QR, so it should sit behind its OWN scope rather
+    # than blanket read/coarse read:members. Adding the scope is safe today —
+    # nothing requires it yet. FLIPPING the route to require it is the OWNER's
+    # Deploy-2 step and MUST come AFTER dsec-app's live service-key row is granted
+    # read:membercard, or every student's card breaks. See members/router.py.
+    # NOTE: for that isolation to actually bite, read:membercard must ALSO be kept
+    # out of the coarse-read superset — either add "membercard" to
+    # SCOPE_ISOLATED_MODULES or switch that route to a plain subset check; today
+    # has_scope lets a coarse `read` key satisfy read:membercard (see report).
+    "read:membercard",
 }
 
 # Modules whose per-module scopes are NOT satisfiable by the legacy coarse
