@@ -436,6 +436,29 @@ def test_flagship_signup_requires_flagship_event(client, rw_key):
                        json={"kind": "notify", "email": "x@y.com"}).status_code == 404
 
 
+def test_sponsor_lead_rejects_overlong_company(client):
+    """COL-API-03: an over-length value is a 422 naming the field, not a 500.
+
+    (SQLite ignores VARCHAR widths, so this proves the new Pydantic validation
+    rather than reproducing the old Postgres StringDataRightTruncation 500.)
+    """
+    r = client.post("/sponsor-leads", json={
+        "source": "enquiry", "email": "a@b.com", "company": "x" * 300,
+    })
+    assert r.status_code == 422
+    assert "company" in r.text
+
+
+def test_flagship_signup_rejects_overlong_company(client):
+    """COL-API-03: body validation fires before the slug lookup, so an
+    over-length company is a 422 naming the field, not a 500."""
+    r = client.post("/website/flagship/any-slug/signup", json={
+        "kind": "sponsor", "email": "a@b.com", "company": "x" * 300,
+    })
+    assert r.status_code == 422
+    assert "company" in r.text
+
+
 # --------------------------------------------------------------------------- #
 # Event preview links ("see it before publishing")
 # --------------------------------------------------------------------------- #

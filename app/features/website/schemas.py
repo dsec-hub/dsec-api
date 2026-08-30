@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class PublicMedia(BaseModel):
@@ -202,11 +204,14 @@ class FlagshipSignupIn(BaseModel):
     to back the event). `company`/`message` are only meaningful for `sponsor`.
     """
 
-    kind: str               # notify|sponsor
-    email: str
-    name: str | None = None
-    company: str | None = None   # sponsor only
-    message: str | None = None   # sponsor only
+    # Lengths mirror the FlagshipSignup columns in app/models.py (kind 16 — closed
+    # to notify|sponsor, email 320, name 256, company 256) so an over-length value
+    # is a 422 naming the field, not a 500 from Postgres at commit time.
+    kind: Literal["notify", "sponsor"]
+    email: str = Field(max_length=320)
+    name: str | None = Field(default=None, max_length=256)
+    company: str | None = Field(default=None, max_length=256)   # sponsor only
+    message: str | None = None   # sponsor only — TEXT column, unbounded is correct
 
 
 class PublicLink(BaseModel):
