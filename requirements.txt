@@ -39,3 +39,7 @@ mcp==1.29.0
 segno==1.6.6
 # Ed25519 verification of inbound Discord interaction signatures (webhook bot).
 cryptography==49.0.0
+# The IANA time-zone database. app/core/clock.py resolves ZoneInfo("Australia/
+# Melbourne") AT IMPORT; the python:3.13-slim runtime image ships NO system
+# zoneinfo, so without this the whole API fails to boot with ZoneInfoNotFoundError.
+tzdata==2026.3
