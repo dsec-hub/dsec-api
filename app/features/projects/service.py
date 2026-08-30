@@ -11,12 +11,28 @@ Convention shared by every workspace feature:
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.owners import attach_owner_ids, set_owners
 from app.models import Project, ProjectOwner
+
+
+def _apply_publish_gate(data: dict, *, currently_public: bool = False) -> None:
+    """Keep the DB publish gate (``is_public = false OR review_state = 'approved'``)
+    satisfied. Publishing a project through the API IS the human approval, so on the
+    transition to public — and only then — stamp ``approved`` + ``reviewed_at`` in the
+    same payload. Guarding on the *transition* (not merely "is public") is what keeps
+    an ordinary content edit of an already-public project from re-stamping reviewed_at
+    or clobbering an explicit review_state. Never overrides a review_state the caller
+    passed: a contradictory public + not-approved pairing is then correctly rejected
+    by the CHECK."""
+    publishing = data.get("is_public") is True and not currently_public
+    if publishing and "review_state" not in data:
+        data["review_state"] = "approved"
+        data.setdefault("reviewed_at", datetime.now(timezone.utc))
 
 
 def _attach_owners(db: Session, rows):
@@ -97,6 +113,7 @@ def create_project(db: Session, data: dict) -> Project:
         data["slug"] = slug
     else:
         data["slug"] = _unique_slug(db, _slugify(data.get("name", "")))
+    _apply_publish_gate(data)
     proj = Project(**data)
     db.add(proj)
     db.commit()
@@ -128,6 +145,7 @@ def update_project(db: Session, project_id: int, data: dict) -> Project | None:
             data["slug"] = slug
         else:
             data.pop("slug")  # unchanged or blank → leave the stored slug alone
+    _apply_publish_gate(data, currently_public=proj.is_public)
     for key, value in data.items():
         setattr(proj, key, value)
     db.commit()

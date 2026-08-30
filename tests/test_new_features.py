@@ -193,7 +193,7 @@ def test_public_team_feed_and_member_detail(client, db):
     draft = models.Event(name="Secret Planning", start_date=date(2099, 10, 1),
                          is_public=False, event_lead_id=pres.id)  # draft — must not leak
     proj = models.Project(name="Duck Bot", slug="duck-bot", summary="A bot.",
-                          is_public=True, lead_id=pres.id)
+                          is_public=True, review_state="approved", lead_id=pres.id)
     db.add_all([ev, draft, proj])
     db.commit()
 
