@@ -206,3 +206,72 @@ def test_preview_does_not_persist_synthesised_slug(client, db):
         assert row.slug is None
     finally:
         fresh.close()
+
+
+# --------------------------------------------------------------------------- #
+# Page type invariant (#3): every slug-published doc is type=="Page"
+# --------------------------------------------------------------------------- #
+
+def test_backfill_sets_type_on_page_shaped_rows(client, db):
+    """A page created before the invariant (slug, is_public, type=None) is served
+    but not previewable; the idempotent backfill repairs it."""
+    from app.features.documents import service
+
+    doc = models.Document(title="Legacy Page", slug="legacy-page", is_public=True,
+                          type=None, content_json=_blocks(), archived=False)
+    db.add(doc)
+    db.commit()
+    doc_id = doc.id
+
+    # Preview minting refuses a non-Page doc today.
+    key = _write_key(db)
+    assert client.get(f"/documents/{doc_id}/page-preview-link",
+                      headers={"authorization": f"Bearer {key}"}).status_code == 400
+
+    n = service.backfill_page_document_type(db)
+    assert n == 1
+    db.expire_all()
+    assert db.get(models.Document, doc_id).type == "Page"
+
+    # Idempotent: a second run changes nothing.
+    assert service.backfill_page_document_type(db) == 0
+
+    # Now it mints + previews cleanly.
+    link = client.get(f"/documents/{doc_id}/page-preview-link",
+                      headers={"authorization": f"Bearer {key}"})
+    assert link.status_code == 200
+    prev = client.get(f"/website{link.json()['path']}")
+    assert prev.status_code == 200 and prev.json()["title"] == "Legacy Page"
+
+
+def test_backfill_leaves_non_page_and_slugless_rows_alone(client, db):
+    from app.features.documents import service
+
+    note = models.Document(title="Note", type="MeetingNotes", content_json=_blocks(), archived=False)
+    slugless = models.Document(title="Draft", type=None, content_json=_blocks(), archived=False)
+    db.add_all([note, slugless])
+    db.commit()
+    service.backfill_page_document_type(db)
+    db.expire_all()
+    assert db.get(models.Document, note.id).type == "MeetingNotes"  # untouched
+    assert db.get(models.Document, slugless.id).type is None        # no slug → not a page
+
+
+def test_create_page_with_slug_defaults_type_to_page(client, db):
+    key = _write_key(db)
+    h = {"authorization": f"Bearer {key}"}
+    doc = client.post("/documents", headers=h, json={
+        "title": "Auto", "slug": "auto-page", "is_public": True, "content_json": _blocks(),
+    }).json()
+    assert doc["type"] == "Page"
+    # ...and is therefore previewable.
+    assert client.get(f"/documents/{doc['id']}/page-preview-link", headers=h).status_code == 200
+
+
+def test_create_document_with_slug_and_conflicting_type_rejected(client, db):
+    key = _write_key(db)
+    h = {"authorization": f"Bearer {key}"}
+    r = client.post("/documents", headers=h, json={
+        "title": "Bad", "slug": "bad-note", "type": "MeetingNotes",
+    })
+    assert r.status_code == 422
