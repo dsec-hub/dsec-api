@@ -133,14 +133,14 @@ def patch_llm(monkeypatch):
     ) -> _Recorder:
         rec = _Recorder()
 
-        def fake_classify(system_prompt, user_content, model=None):
-            rec.classify_args.append((system_prompt, user_content, model))
+        def fake_classify(system_prompt, user_content):
+            rec.classify_args.append((system_prompt, user_content))
             if classify_exc is not None:
                 raise classify_exc
             return LLMResult(text=label, tokens=10, cost=0.0001, model="gpt-4o-mini")
 
-        def fake_generate(system_prompt, user_content, model=None):
-            rec.generate_args.append((system_prompt, user_content, model))
+        def fake_generate(system_prompt, user_content):
+            rec.generate_args.append((system_prompt, user_content))
             if draft_exc is not None:
                 raise draft_exc
             return LLMResult(text=draft, tokens=20, cost=0.0002, model="gpt-4o-mini")

@@ -18,7 +18,9 @@ class LLMError(Exception):
     """Raised on any LLM provider failure. Callers catch and degrade."""
 
 
-# Claude Haiku 4.5 pricing: $1.00/1M input, $5.00/1M output
+# Claude Haiku 4.5 pricing: $1.00/1M input, $5.00/1M output.
+# These are hardcoded for ANTHROPIC_MODEL's current value. Changing
+# ANTHROPIC_MODEL without changing these silently mis-reports cost — see SEC-21.
 _INPUT_COST_PER_1K = 0.001
 _OUTPUT_COST_PER_1K = 0.005
 
@@ -75,14 +77,22 @@ def _chat(system_prompt: str, user_content: str, *, max_tokens: int) -> LLMResul
     )
 
 
-def classify(system_prompt: str, user_content: str, model: str | None = None) -> LLMResult:
-    """Cheap-model triage. Returns an `LLMResult` whose `text` is the label."""
-    # model param kept for API compatibility but ignored — always uses ANTHROPIC_MODEL
+def classify(system_prompt: str, user_content: str) -> LLMResult:
+    """Triage. Returns an `LLMResult` whose `text` is the label.
+
+    Uses `settings.ANTHROPIC_MODEL` — there is one configured model and it does
+    both triage and drafting. If a cheaper triage model is ever wanted, add the
+    setting and thread it through `_chat`; do not re-add a parameter that is
+    silently ignored.
+    """
     return _chat(system_prompt, user_content, max_tokens=512)
 
 
-def generate(system_prompt: str, user_content: str, model: str | None = None) -> LLMResult:
-    """Drafting / generation. Returns an `LLMResult` with the produced text."""
+def generate(system_prompt: str, user_content: str) -> LLMResult:
+    """Drafting / generation. Returns an `LLMResult` with the produced text.
+
+    Same single model as `classify` — see that docstring.
+    """
     return _chat(system_prompt, user_content, max_tokens=4096)
 
 
