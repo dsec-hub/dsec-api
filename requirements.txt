@@ -1,11 +1,14 @@
 # Upper-bounded, exact pins. Generated 2026-08-06 from the known-good venv.
 #
-# WHY: these were all unbounded (`>=x.y`). On 2026-08-05 a docs-only commit
-# triggered a rebuild, pip resolved mcp to 2.0.0 (released 28 Jul, which deleted
-# mcp.server.fastmcp), and the API returned FUNCTION_INVOCATION_FAILED on every
-# route for ~20 hours. No application code had changed.
+# WHY: these were all unbounded (open-ended version ranges). On 2026-08-05 a
+# docs-only commit triggered a rebuild, pip resolved mcp to 2.0.0 (released 28
+# Jul, which deleted mcp.server.fastmcp), and the API returned
+# FUNCTION_INVOCATION_FAILED on every route for ~20 hours. No application code
+# had changed.
 #
-# Bump deliberately, one at a time, and redeploy. Do not loosen these back to >=.
+# Bump deliberately, one at a time, and redeploy. Do not loosen these back to
+# open-ended ranges. This policy covers requirements-dev.txt too — pin
+# everything there exactly.
 fastapi==0.141.1
 uvicorn[standard]==0.52.0
 pydantic==2.13.4

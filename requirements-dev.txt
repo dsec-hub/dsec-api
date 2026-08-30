@@ -4,4 +4,8 @@
 
 # Note: alembic is a *runtime* dependency (in requirements.txt) because startup
 # and the deploy step run migrations; only pytest is dev-only.
-pytest>=8.2.0
+#
+# Exact pin, same policy as requirements.txt: an unbounded dependency is what
+# caused the 2026-08-05 outage. A pytest major bump must be a deliberate commit,
+# not something CI discovers on a contributor's unrelated PR.
+pytest==9.1.1

@@ -52,6 +52,25 @@ schema is created on first run; load sample data into the domain tables with
 
 ---
 
+## Running the tests
+
+The project targets **Python 3.13** — the same version as the Dockerfile
+(`python:3.13-slim`), which is the real deploy target. Build the venv on that
+interpreter so local, CI and production agree:
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt   # includes requirements.txt
+.venv/bin/python -m pytest
+```
+
+The suite runs entirely against a throwaway SQLite database (`tests/conftest.py`)
+and never touches Neon or any external service. `requirements-dev.txt` pins
+`pytest` exactly (same policy as `requirements.txt`) so a pytest release never
+turns an unrelated PR red without a deliberate bump.
+
+---
+
 ## Configuration
 
 All config is env-driven via `app/config.py` (pydantic Settings). Copy
