@@ -104,6 +104,20 @@ def archive_board(
     return BoardOut.model_validate(board)
 
 
+@router.post("/boards/{board_id}/unarchive", response_model=BoardOut)
+def unarchive_board(
+    board_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> BoardOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    board = service.unarchive_board(db, board_id)
+    if board is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "board not found")
+    return BoardOut.model_validate(board)
+
+
 # -----------------------------------------------------------------------------
 # Tasks (cards)
 # -----------------------------------------------------------------------------
@@ -195,6 +209,20 @@ def archive_task(
 ) -> TaskOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     task = service.archive_task(db, task_id)
+    if task is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
+    return TaskOut.model_validate(task)
+
+
+@router.post("/{task_id}/unarchive", response_model=TaskOut)
+def unarchive_task(
+    task_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> TaskOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    task = service.unarchive_task(db, task_id)
     if task is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
     return TaskOut.model_validate(task)

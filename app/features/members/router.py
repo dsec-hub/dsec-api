@@ -35,7 +35,7 @@ def list_members(
     limit: int = Query(200, le=1000),
     offset: int = 0,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:members")),
 ) -> list[MemberOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_members(
@@ -49,7 +49,7 @@ def list_members(
 def member_stats(
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:members")),
 ) -> MemberStats:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     return MemberStats(
@@ -89,7 +89,7 @@ def member_verification_code(
     member_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:members")),
 ) -> MemberVerification:
     """The member's own digital-membership-card data (code + QR + status)."""
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
@@ -115,7 +115,7 @@ def get_member(
     member_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:members")),
 ) -> MemberOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     m = service.get_member(db, member_id)

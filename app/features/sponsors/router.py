@@ -99,6 +99,20 @@ def archive_sponsor(
     return SponsorOut.model_validate(sponsor)
 
 
+@router.post("/{sponsor_id}/unarchive", response_model=SponsorOut)
+def unarchive_sponsor(
+    sponsor_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write:sponsors")),
+) -> SponsorOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    sponsor = service.unarchive_sponsor(db, sponsor_id)
+    if sponsor is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "sponsor not found")
+    return SponsorOut.model_validate(sponsor)
+
+
 # --------------------------------------------------------------------------- #
 # Sponsor contacts (people attached to a sponsorship)
 # --------------------------------------------------------------------------- #

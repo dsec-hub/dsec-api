@@ -22,17 +22,19 @@ from dataclasses import dataclass
 SCOPE_ORDER: tuple[str, ...] = (
     "read", "write", "trigger", "ingest",
     "read:sponsors", "write:sponsors", "read:finance", "write:finance",
+    "read:members", "read:people", "write:people",
+    "read:documents", "write:documents",
 )
 
 # Human-readable, assistant-facing description of each scope.
 SCOPE_SUMMARY: dict[str, str] = {
-    "read": "View workspace data — members, events, projects, tasks, meetings, "
-            "documents, partners and people (a legacy read key also covers the "
-            "isolated Sponsors and Finance modules).",
+    "read": "View workspace data — events, projects, tasks, meetings, partners "
+            "and links (a legacy read key also covers every isolated module: "
+            "Sponsors, Finance, Members, People and Documents).",
     "write": "Create and update workspace data — events (plus speaker, sponsor "
-             "and partner line-ups), projects, task boards, meetings, documents, "
-             "partners and people (a legacy write key also covers the isolated "
-             "Sponsors and Finance modules).",
+             "and partner line-ups), projects, task boards, meetings, partners "
+             "and links (a legacy write key also covers every isolated module: "
+             "Sponsors, Finance, People and Documents).",
     "trigger": "Run AI features that spend tokens — currently generating meeting "
                "notes and action items from a transcript.",
     "ingest": "Import the weekly DUSA membership / P&L spreadsheets. Admin-only "
@@ -46,6 +48,15 @@ SCOPE_SUMMARY: dict[str, str] = {
                     "ledger lines (the isolated Finance module).",
     "write:finance": "Set event budgets and auto-applied grants. Implies "
                      "read:finance.",
+    "read:members": "View only the membership roster — the paid members imported "
+                    "weekly from DUSA (names, emails, student ids). Read-only; the "
+                    "roster is never written over the API.",
+    "read:people": "View only committee people — the directory the workspace "
+                   "links events, tasks and meetings to (the isolated People module).",
+    "write:people": "Create and update committee people. Implies read:people.",
+    "read:documents": "View only stored documents — titles, metadata and custom "
+                      "pages (the isolated Documents module).",
+    "write:documents": "Create, update and archive documents. Implies read:documents.",
 }
 
 
@@ -72,11 +83,11 @@ CATALOG: tuple[Tool, ...] = (
          "Show which DSEC API key you're using and exactly what it can do. Call this first."),
 
     # ---- Members ---------------------------------------------------------- #
-    Tool("list_members", "read", "Members",
+    Tool("list_members", "read:members", "Members",
          "List club members (the paid roster from the weekly DUSA import)."),
-    Tool("get_member", "read", "Members",
+    Tool("get_member", "read:members", "Members",
          "Get one club member by id."),
-    Tool("member_stats", "read", "Members",
+    Tool("member_stats", "read:members", "Members",
          "Member counts and the week-by-week membership trend."),
 
     # ---- Finance ---------------------------------------------------------- #
@@ -101,6 +112,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update fields on an existing event (incl. flagship_state teaser→revealed)."),
     Tool("archive_event", "write", "Events",
          "Soft-delete (archive) an event. Confirm with the human first."),
+    Tool("unarchive_event", "write", "Events",
+         "Restore a previously archived event (undo archive)."),
     Tool("create_event_review_form", "write", "Events",
          "Create the Tally post-event review form for an event."),
     Tool("get_event_review_responses", "read", "Events",
@@ -146,6 +159,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update a partner's details / move it along the pipeline (status)."),
     Tool("archive_partner", "write", "Partners",
          "Soft-delete (archive) a partner org. Confirm with the human first."),
+    Tool("unarchive_partner", "write", "Partners",
+         "Restore a previously archived partner org (undo archive)."),
 
     # ---- Link tree -------------------------------------------------------- #
     Tool("list_links", "read", "Link tree",
@@ -158,6 +173,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update a link-tree button (only the fields you pass change)."),
     Tool("archive_link", "write", "Link tree",
          "Soft-delete (archive) a link-tree button. Confirm with the human first."),
+    Tool("unarchive_link", "write", "Link tree",
+         "Restore a previously archived link-tree button (undo archive)."),
     Tool("reorder_links", "write", "Link tree",
          "Reorder the link-tree buttons by passing their ids in the new top-to-bottom order."),
     Tool("get_link_profile", "read", "Link tree",
@@ -180,6 +197,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update a /scan QR card (only the fields you pass change)."),
     Tool("archive_scan_target", "write", "Scan wall",
          "Soft-delete (archive) a /scan QR card. Confirm with the human first."),
+    Tool("unarchive_scan_target", "write", "Scan wall",
+         "Restore a previously archived /scan QR card (undo archive)."),
     Tool("reorder_scan_targets", "write", "Scan wall",
          "Reorder the /scan QR cards by passing their ids in the new order."),
     Tool("get_scan_page", "read", "Scan wall",
@@ -200,6 +219,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update fields on a project."),
     Tool("archive_project", "write", "Projects",
          "Soft-delete (archive) a project. Confirm with the human first."),
+    Tool("unarchive_project", "write", "Projects",
+         "Restore a previously archived project (undo archive)."),
 
     # ---- Tasks ------------------------------------------------------------ #
     Tool("list_boards", "read", "Tasks",
@@ -210,6 +231,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update a task board's name, description, committee or columns."),
     Tool("archive_board", "write", "Tasks",
          "Soft-delete (archive) a task board. Confirm with the human first."),
+    Tool("unarchive_board", "write", "Tasks",
+         "Restore a previously archived task board (undo archive)."),
     Tool("list_tasks", "read", "Tasks",
          "List task cards (filterable by board, column, assignee, …)."),
     Tool("get_task", "read", "Tasks",
@@ -222,6 +245,8 @@ CATALOG: tuple[Tool, ...] = (
          "Move a task to a column and position."),
     Tool("archive_task", "write", "Tasks",
          "Soft-delete (archive) a task card. Confirm with the human first."),
+    Tool("unarchive_task", "write", "Tasks",
+         "Restore a previously archived task card (undo archive)."),
 
     # ---- Meetings --------------------------------------------------------- #
     Tool("list_meetings", "read", "Meetings",
@@ -234,6 +259,8 @@ CATALOG: tuple[Tool, ...] = (
          "Update a meeting (edit transcript, or hand-write notes/action items)."),
     Tool("archive_meeting", "write", "Meetings",
          "Soft-delete (archive) a meeting. Confirm with the human first."),
+    Tool("unarchive_meeting", "write", "Meetings",
+         "Restore a previously archived meeting (undo archive)."),
     Tool("generate_meeting_notes", "trigger", "Meetings",
          "AI-summarise a transcript into notes and action items (spends tokens)."),
     Tool("get_meeting_agenda", "read", "Meetings",
@@ -246,18 +273,20 @@ CATALOG: tuple[Tool, ...] = (
          "Freeze the agenda once the meeting starts (still viewable, no longer editable)."),
 
     # ---- Documents -------------------------------------------------------- #
-    Tool("list_documents", "read", "Documents",
+    Tool("list_documents", "read:documents", "Documents",
          "List documents (notes, meeting notes, deliverables, policies)."),
-    Tool("get_document", "read", "Documents",
+    Tool("get_document", "read:documents", "Documents",
          "Get one document with its full Markdown content."),
-    Tool("create_document", "write", "Documents",
+    Tool("create_document", "write:documents", "Documents",
          "Create a document — or a public dsec.club page (set slug + is_public + "
          "content_json blocks)."),
-    Tool("update_document", "write", "Documents",
+    Tool("update_document", "write:documents", "Documents",
          "Update a document's title, content, status or assignee — or publish it "
          "as a page (slug, is_public, content_json blocks, nav placement)."),
-    Tool("archive_document", "write", "Documents",
+    Tool("archive_document", "write:documents", "Documents",
          "Soft-delete (archive) a document. Confirm with the human first."),
+    Tool("unarchive_document", "write:documents", "Documents",
+         "Restore a previously archived document (undo archive)."),
 
     # ---- Sponsors --------------------------------------------------------- #
     Tool("list_sponsors", "read:sponsors", "Sponsors",
@@ -270,6 +299,8 @@ CATALOG: tuple[Tool, ...] = (
          "Advance a sponsor through the pipeline / edit its details."),
     Tool("archive_sponsor", "write:sponsors", "Sponsors",
          "Soft-delete (archive) a sponsor. Confirm with the human first."),
+    Tool("unarchive_sponsor", "write:sponsors", "Sponsors",
+         "Restore a previously archived sponsor (undo archive)."),
 
     # ---- Sponsor contacts ------------------------------------------------- #
     Tool("list_sponsor_contacts", "read:sponsors", "Sponsor contacts",
@@ -300,16 +331,18 @@ CATALOG: tuple[Tool, ...] = (
          "Move an inbound lead through the pipeline and add notes."),
 
     # ---- People ----------------------------------------------------------- #
-    Tool("list_people", "read", "People",
+    Tool("list_people", "read:people", "People",
          "List people (exec, committee, external contacts) — use this to resolve assignees."),
-    Tool("get_person", "read", "People",
+    Tool("get_person", "read:people", "People",
          "Get one person by id (committee member or external contact)."),
-    Tool("create_person", "write", "People",
+    Tool("create_person", "write:people", "People",
          "Add a person (committee member or external contact)."),
-    Tool("update_person", "write", "People",
+    Tool("update_person", "write:people", "People",
          "Update a person's details."),
-    Tool("archive_person", "write", "People",
+    Tool("archive_person", "write:people", "People",
          "Soft-delete (archive) a person. Confirm with the human first."),
+    Tool("unarchive_person", "write:people", "People",
+         "Restore a previously archived person (undo archive)."),
 
     # ---- Media & attachments ---------------------------------------------- #
     Tool("list_media", "read", "Media & attachments",

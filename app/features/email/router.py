@@ -29,7 +29,7 @@ def process_email(
     Script never sees a 500 (which it would just retry forever).
     """
     try:
-        return run_pipeline(req, db)
+        return run_pipeline(req, db, dedupe=True, enforce_llm_cap=True)
     except Exception:  # pragma: no cover - last-resort safety net
         _logger.exception("unhandled email pipeline error for thread %s", req.threadId)
         return EmailResponse(action="ignore")

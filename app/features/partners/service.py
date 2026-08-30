@@ -73,3 +73,13 @@ def archive_partner(db: Session, partner_id: int) -> Partner | None:
     db.commit()
     db.refresh(partner)
     return partner
+
+
+def unarchive_partner(db: Session, partner_id: int) -> Partner | None:
+    partner = db.get(Partner, partner_id)
+    if partner is None:
+        return None
+    partner.archived = False
+    db.commit()
+    db.refresh(partner)
+    return partner

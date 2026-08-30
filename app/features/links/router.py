@@ -137,3 +137,17 @@ def archive_link(
     if link is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "link not found")
     return LinkOut.model_validate(link)
+
+
+@router.post("/{link_id:int}/unarchive", response_model=LinkOut)
+def unarchive_link(
+    link_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> LinkOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    link = service.unarchive_link(db, link_id)
+    if link is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "link not found")
+    return LinkOut.model_validate(link)

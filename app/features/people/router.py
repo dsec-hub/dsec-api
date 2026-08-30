@@ -30,7 +30,7 @@ def list_people(
     limit: int = Query(100, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:people")),
 ) -> list[PersonOut]:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     rows = service.list_people(
@@ -45,7 +45,7 @@ def get_person(
     person_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("read")),
+    key: APIKey = Depends(require_api_key("read:people")),
 ) -> PersonOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.get_person(db, person_id)
@@ -59,7 +59,7 @@ def create_person(
     body: PersonCreate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:people")),
 ) -> PersonOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.create_person(db, body.model_dump(exclude_unset=True))
@@ -72,7 +72,7 @@ def update_person(
     body: PersonUpdate,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:people")),
 ) -> PersonOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.update_person(db, person_id, body.model_dump(exclude_unset=True))
@@ -86,10 +86,24 @@ def archive_person(
     person_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    key: APIKey = Depends(require_api_key("write")),
+    key: APIKey = Depends(require_api_key("write:people")),
 ) -> PersonOut:
     limiter.check_request(db, key_id=key.id, ip=client_ip(request))
     person = service.archive_person(db, person_id)
+    if person is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")
+    return PersonOut.model_validate(person)
+
+
+@router.post("/{person_id}/unarchive", response_model=PersonOut)
+def unarchive_person(
+    person_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write:people")),
+) -> PersonOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    person = service.unarchive_person(db, person_id)
     if person is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "person not found")
     return PersonOut.model_validate(person)

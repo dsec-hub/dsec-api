@@ -7,6 +7,46 @@ follows [Keep a Changelog](https://keepachangelog.com/); the project uses
 ## [Unreleased]
 
 ### Added
+- **Reversible archive (unarchive) + service-continuity export** — soft-delete was
+  one-way (every domain record had an `archived` column + `archive_*` action but no
+  undo). Added `unarchive_*` across REST, MCP tools and the scope catalog for all 11
+  archivable modules (events, people, sponsors, projects, tasks, boards, meetings,
+  documents, partners, links, scan), so a mistaken archive is recoverable at the same
+  least-privilege scope as the archive. New `GET /admin/archive/export` (basic-auth,
+  audited) returns a portable, **secret-free** handover manifest: schema snapshot +
+  per-table row counts + alembic revision + env var NAMES (flagged sensitive, never
+  values) + API key list (metadata, never hashes). It is a manifest, not a data dump
+  (a row-level PII snapshot stays out of scope for an HTTP endpoint by design). New:
+  `features/archive/service.py`.
+- **Email decision-maker → DUSA (ships DARK)** — an optional LLM stage after
+  classify proposes ONE structured action (`update_dusa_status`) against a compact
+  snapshot of open events, to keep the dashboard's DUSA kanban in sync from email.
+  Conservative by construction: the target event is resolved by a deterministic
+  stdlib-`difflib` matcher (`email/matching.py`) that refuses near-ties, an LLM id
+  that disagrees is rejected, the status is validated against
+  `events/dusa.py::DUSA_STATUSES`, a mutation is applied only when the **sender's
+  domain is on the `EMAIL_DUSA_SENDER_DOMAINS` allowlist** (so a spoofed "your
+  event is approved" can't flip the kanban), and it mutates at most one event per
+  email.
+  Two guards default SAFE — `EMAIL_DECISION_MAKER_ENABLED=false` (never runs) and
+  `EMAIL_DECISION_DRY_RUN=true` (logs its proposal to `EventLog` but writes
+  nothing). Every decision, including "none", is audited. New:
+  `features/events/dusa.py`, `events.service.set_dusa_status`, `llm.decide()`,
+  `features/email/{matching,actions}.py`, `EmailDecision` response field.
+- **Outbound Discord relay** — `POST /public/notify` (trigger-scoped) relays a
+  short message to a Discord channel via an incoming webhook
+  (`core.notify.notify_discord`, `DISCORD_NOTIFY_WEBHOOK_URL`; 503 when
+  unconfigured, every relay logged). The Cal.com booking webhook can also drop a
+  best-effort alert (`CALCOM_NOTIFY_DISCORD`) — it never posts the booker's raw
+  email.
+- **Per-module scopes for PII-heavy modules** — `read:members`,
+  `read/write:people`, `read/write:documents` now isolate those modules across
+  REST, MCP tools and the scope catalog, so a key can be minted for exactly one.
+  Legacy `read`/`write` keys still satisfy them (backward-compatible).
+- **Structured/JSON logging** — `core/logconfig.py` adds a JSON log formatter for
+  host log drains, selected by `LOG_FORMAT=json` (default `text` = no change);
+  `LOG_LEVEL` tunes verbosity.
+
 - **Post-event reviews (Tally)** — each event can spin up a short, plain-language
   feedback form in **Tally** (rating + what went well + what to improve). New
   self-contained `features/reviews/` (Tally HTTP client, declarative question
@@ -88,9 +128,19 @@ follows [Keep a Changelog](https://keepachangelog.com/); the project uses
   and the `/mcp` server (see the workspace/MCP/website entries above).
 
 ### Changed
+- **`/email/process` now counts against `GLOBAL_DAILY_LLM_CAP`** — the
+  agent-secret path was previously uncounted and unbounded. It also **dedupes
+  re-delivered messages** by `messageId`, but only once a durable draft/decision
+  was produced, so a cap-hit or transient LLM error stays retryable.
 - Schema creation now runs through `alembic upgrade head` instead of
   `Base.metadata.create_all`, gated by the new `RUN_MIGRATIONS_ON_STARTUP` setting
   (default true; set false on serverless and migrate as a deploy step).
+
+### Fixed
+- **`rate_limit` unique key is now bucket-aware** (`key_id, bucket, window_start`)
+  with `NULLS NOT DISTINCT` on Neon (migration `b1d4f7a9c3e2`), fixing the per-IP
+  duplicate-row counter split and a latent 00:00-UTC collision between the `req`
+  and `trigger` rows. **Run `alembic upgrade head` on Neon at the next deploy.**
 
 ### Removed
 - **Notion integration** — the architecture no longer involves Notion. Removed the

@@ -40,6 +40,8 @@ class RateLimiter(Protocol):
 
     def check_and_count_trigger(self, db: Session, *, key_id: int) -> None: ...
 
+    def check_and_count_llm_global(self, db: Session) -> None: ...
+
 
 class NeonRateLimiter:
     """Fixed-window counters stored in Postgres (Neon). Slightly loose under
@@ -59,12 +61,13 @@ class NeonRateLimiter:
         flood is concurrent by definition, so the per-IP limit failed in exactly
         the case it exists for, while looking correct under manual testing.
 
-        `.first()` rather than `.scalar_one_or_none()`: the unique constraint is
-        on (key_id, window_start) and excludes `bucket`, and Postgres treats NULL
-        key_ids as distinct — so two per-IP requests that both miss can still
-        race in duplicate rows. Ordering by id makes every later request pick the
-        same one, so the duplicates stop mattering after the first instant
-        instead of splitting the count indefinitely.
+        `.first()` rather than `.scalar_one_or_none()`: historically the unique
+        key was (key_id, window_start) and excluded `bucket`, and Postgres treats
+        NULL key_ids as distinct, so two per-IP requests that both missed could
+        race into duplicate rows. Migration b1d4f7a9c3e2 made the key
+        (key_id, bucket, window_start) with NULLS NOT DISTINCT, which prevents
+        those duplicates on Neon; the order-by-id read stays as belt-and-braces
+        (and still matters on SQLite dev, where NULLs remain distinct).
         """
         now = datetime.now(timezone.utc)
         window = _minute_window(now)
@@ -141,6 +144,78 @@ class NeonRateLimiter:
                     headers={"Retry-After": "60"},
                 )
 
+    def _global_llm_today(self, db: Session, day: datetime) -> int:
+        """Sum today's trigger counters across every key (and the keyless bucket)."""
+        return db.execute(
+            select(func.coalesce(func.sum(RateLimit.trigger_count_today), 0)).where(
+                RateLimit.window_start == day,
+                RateLimit.bucket == "trigger",
+            )
+        ).scalar_one()
+
+    def check_and_count_llm_global(self, db: Session) -> None:
+        """Enforce + count the global daily LLM cap for a KEYLESS caller.
+
+        The REST trigger routes hold an APIKey and go through
+        ``check_and_count_trigger``; the agent-secret paths (``/email/process``)
+        have no key, so their LLM spend was never counted against — nor bounded
+        by — ``GLOBAL_DAILY_LLM_CAP``. This counts one unit of spend for today
+        into a NULL-keyed ``trigger`` row, which the global sum already includes,
+        so email and the keyed trigger routes share one daily budget.
+
+        Raises 429 (no increment) when the cap is already reached, exactly like
+        the keyed path; the email pipeline catches that and degrades to ignore.
+        """
+        now = datetime.now(timezone.utc)
+        day = _day_window(now)
+        if self._global_llm_today(db, day) >= settings.GLOBAL_DAILY_LLM_CAP:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="global daily LLM cap reached; no LLM call made",
+                headers={"Retry-After": "3600"},
+            )
+        self._bump_global_trigger(db, day)
+
+    def _bump_global_trigger(self, db: Session, day: datetime) -> None:
+        """Increment the NULL-keyed daily trigger counter, in SQL.
+
+        Mirrors ``_bump_minute``: the increment is ``+ 1`` under the UPDATE's row
+        lock (not read-modify-write in Python, which drops concurrent increments),
+        and the first-of-day insert has an IntegrityError fallback so a concurrent
+        first email converges on an update instead of raising.
+        """
+        where = (
+            RateLimit.key_id.is_(None),
+            RateLimit.bucket == "trigger",
+            RateLimit.window_start == day,
+        )
+        row_id = db.execute(
+            select(RateLimit.id).where(*where).order_by(RateLimit.id).limit(1)
+        ).scalars().first()
+        if row_id is not None:
+            db.execute(
+                update(RateLimit)
+                .where(RateLimit.id == row_id)
+                .values(trigger_count_today=RateLimit.trigger_count_today + 1)
+            )
+            db.commit()
+            return
+        try:
+            db.execute(
+                insert(RateLimit).values(
+                    key_id=None, bucket="trigger", window_start=day, trigger_count_today=1
+                )
+            )
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            db.execute(
+                update(RateLimit)
+                .where(*where)
+                .values(trigger_count_today=RateLimit.trigger_count_today + 1)
+            )
+            db.commit()
+
     def check_and_count_trigger(self, db: Session, *, key_id: int) -> None:
         """Enforce per-key daily trigger cap AND the global daily LLM cap.
 
@@ -151,13 +226,7 @@ class NeonRateLimiter:
         day = _day_window(now)
 
         # Global daily cap across all keys (sum of today's trigger counters).
-        global_today = db.execute(
-            select(func.coalesce(func.sum(RateLimit.trigger_count_today), 0)).where(
-                RateLimit.window_start == day,
-                RateLimit.bucket == "trigger",
-            )
-        ).scalar_one()
-        if global_today >= settings.GLOBAL_DAILY_LLM_CAP:
+        if self._global_llm_today(db, day) >= settings.GLOBAL_DAILY_LLM_CAP:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="global daily LLM cap reached; no LLM call made",

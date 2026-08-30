@@ -201,7 +201,7 @@ def whoami() -> dict:
 def list_members(current_only: bool = True, dusa_only: bool | None = None,
                  search: str | None = None, limit: int = 50) -> list[dict]:
     """List club members (the paid roster from the weekly DUSA import)."""
-    require_scope("read")
+    require_scope("read:members")
     with SessionLocal() as db:
         return _dump_list(MemberOut, members_service.list_members(
             db, current_only=current_only, dusa_only=dusa_only, search=search, limit=limit))
@@ -210,7 +210,7 @@ def list_members(current_only: bool = True, dusa_only: bool | None = None,
 @mcp.tool()
 def member_stats() -> dict:
     """Current member counts (total, DUSA vs non-DUSA) and the weekly trend."""
-    require_scope("read")
+    require_scope("read:members")
     with SessionLocal() as db:
         return {
             "counts": members_service.member_counts(db),
@@ -221,7 +221,7 @@ def member_stats() -> dict:
 @mcp.tool()
 def get_member(member_id: int) -> dict:
     """Get one club member by id (from the weekly DUSA roster)."""
-    require_scope("read")
+    require_scope("read:members")
     with SessionLocal() as db:
         return _dump(MemberOut, _require(members_service.get_member(db, member_id), "member not found"))
 
@@ -425,6 +425,15 @@ def archive_event(event_id: int) -> dict:
     require_scope("write")
     with SessionLocal() as db:
         return _dump(EventOut, _require(events_service.archive_event(db, event_id), "event not found"))
+
+
+@mcp.tool()
+def unarchive_event(event_id: int) -> dict:
+    """Restore a previously archived event (sets archived=false). It reappears in
+    the dashboard and, if otherwise eligible, the public site."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(EventOut, _require(events_service.unarchive_event(db, event_id), "event not found"))
 
 
 # --------------------------------------------------------------------------- #
@@ -657,6 +666,15 @@ def archive_partner(partner_id: int) -> dict:
                                           "partner not found"))
 
 
+@mcp.tool()
+def unarchive_partner(partner_id: int) -> dict:
+    """Restore a previously archived partner org/club (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(PartnerOut, _require(partners_service.unarchive_partner(db, partner_id),
+                                          "partner not found"))
+
+
 # --------------------------------------------------------------------------- #
 # link tree (the public /links page: a profile header + a stack of buttons)
 # --------------------------------------------------------------------------- #
@@ -724,6 +742,15 @@ def archive_link(link_id: int) -> dict:
     require_scope("write")
     with SessionLocal() as db:
         return _dump(LinkOut, _require(links_service.archive_link(db, link_id),
+                                       "link not found"))
+
+
+@mcp.tool()
+def unarchive_link(link_id: int) -> dict:
+    """Restore a previously archived link-tree button (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(LinkOut, _require(links_service.unarchive_link(db, link_id),
                                        "link not found"))
 
 
@@ -840,6 +867,15 @@ def archive_scan_target(target_id: int) -> dict:
 
 
 @mcp.tool()
+def unarchive_scan_target(target_id: int) -> dict:
+    """Restore a previously archived /scan QR card (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(ScanTargetOut, _require(scan_service.unarchive_scan_target(db, target_id),
+                                             "scan target not found"))
+
+
+@mcp.tool()
 def reorder_scan_targets(ordered_ids: list[int]) -> list[dict]:
     """Reorder the /scan QR cards: pass every card id in the new order. Each card's
     display_order is set to its index. Returns the new display-ordered list."""
@@ -952,6 +988,15 @@ def archive_project(project_id: int) -> dict:
                                           "project not found"))
 
 
+@mcp.tool()
+def unarchive_project(project_id: int) -> dict:
+    """Restore a previously archived community project (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(ProjectOut, _require(projects_service.unarchive_project(db, project_id),
+                                          "project not found"))
+
+
 # --------------------------------------------------------------------------- #
 # task boards + tasks (Trello-style)
 # --------------------------------------------------------------------------- #
@@ -993,6 +1038,14 @@ def archive_board(board_id: int) -> dict:
     require_scope("write")
     with SessionLocal() as db:
         return _dump(BoardOut, _require(tasks_service.archive_board(db, board_id), "board not found"))
+
+
+@mcp.tool()
+def unarchive_board(board_id: int) -> dict:
+    """Restore a previously archived task board (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(BoardOut, _require(tasks_service.unarchive_board(db, board_id), "board not found"))
 
 
 @mcp.tool()
@@ -1078,6 +1131,14 @@ def archive_task(task_id: int) -> dict:
         return _dump(TaskOut, _require(tasks_service.archive_task(db, task_id), "task not found"))
 
 
+@mcp.tool()
+def unarchive_task(task_id: int) -> dict:
+    """Restore a previously archived task card (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(TaskOut, _require(tasks_service.unarchive_task(db, task_id), "task not found"))
+
+
 # --------------------------------------------------------------------------- #
 # meetings (+ AI notes)
 # --------------------------------------------------------------------------- #
@@ -1156,6 +1217,15 @@ def archive_meeting(meeting_id: int) -> dict:
     require_scope("write")
     with SessionLocal() as db:
         return _dump(MeetingOut, _require(meetings_service.archive_meeting(db, meeting_id),
+                                          "meeting not found"))
+
+
+@mcp.tool()
+def unarchive_meeting(meeting_id: int) -> dict:
+    """Restore a previously archived meeting (sets archived=false)."""
+    require_scope("write")
+    with SessionLocal() as db:
+        return _dump(MeetingOut, _require(meetings_service.unarchive_meeting(db, meeting_id),
                                           "meeting not found"))
 
 
@@ -1259,7 +1329,7 @@ def list_documents(type: str | None = None, status: str | None = None,
     """List documents. type is Note|MeetingNotes|SponsorDoc|Deliverable|Policy|General.
 
     Pass `related_task_id` to list the documents linked to a given task."""
-    require_scope("read")
+    require_scope("read:documents")
     with SessionLocal() as db:
         return _dump_list(DocumentOut, documents_service.list_documents(
             db, type=type, status=status, assignee_id=assignee_id,
@@ -1269,7 +1339,7 @@ def list_documents(type: str | None = None, status: str | None = None,
 @mcp.tool()
 def get_document(document_id: int) -> dict:
     """Get one document including its full markdown content."""
-    require_scope("read")
+    require_scope("read:documents")
     with SessionLocal() as db:
         return _dump(DocumentOut, _require(documents_service.get_document(db, document_id),
                                            "document not found"))
@@ -1299,7 +1369,7 @@ def create_document(title: str, content: str | None = None, type: str | None = N
     `show_in_nav`/`nav_area` (header|footer)/`nav_label`/`nav_order` control its
     placement in the site navigation; `seo_description`/`cover_image_url` set the
     page <head>. Image blocks reference uploaded media URLs (upload in the dashboard)."""
-    require_scope("write")
+    require_scope("write:documents")
     data = _coerce(DocumentCreate, _data(title=title, content=content, type=type, committee=committee,
                                          status=status,
                                          parent_id=parent_id, assignee_id=assignee_id,
@@ -1329,7 +1399,7 @@ def update_document(document_id: int, title: str | None = None, content: str | N
     dsec.club/<slug> page. `content_json` is the block body (see create_document
     for the block contract). `show_in_nav`/`nav_area`/`nav_label`/`nav_order`
     place it in the site nav; `seo_description`/`cover_image_url` set the <head>."""
-    require_scope("write")
+    require_scope("write:documents")
     data = _coerce(DocumentUpdate, _data(title=title, content=content, status=status,
                                          assignee_id=assignee_id,
                                          related_task_id=related_task_id or None,
@@ -1349,9 +1419,18 @@ def update_document(document_id: int, title: str | None = None, content: str | N
 def archive_document(document_id: int) -> dict:
     """Soft-delete (archive) a document. It's hidden from the dashboard but never
     hard-deleted. Confirm with the human first."""
-    require_scope("write")
+    require_scope("write:documents")
     with SessionLocal() as db:
         return _dump(DocumentOut, _require(documents_service.archive_document(db, document_id),
+                                           "document not found"))
+
+
+@mcp.tool()
+def unarchive_document(document_id: int) -> dict:
+    """Restore a previously archived document (sets archived=false)."""
+    require_scope("write:documents")
+    with SessionLocal() as db:
+        return _dump(DocumentOut, _require(documents_service.unarchive_document(db, document_id),
                                            "document not found"))
 
 
@@ -1429,6 +1508,16 @@ def archive_sponsor(sponsor_id: int) -> dict:
     require_scope("write:sponsors")
     with SessionLocal() as db:
         return _dump(SponsorOut, _require(sponsors_service.archive_sponsor(db, sponsor_id),
+                                          "sponsor not found"))
+
+
+@mcp.tool()
+def unarchive_sponsor(sponsor_id: int) -> dict:
+    """Restore a previously archived sponsor / pipeline relationship (sets
+    archived=false)."""
+    require_scope("write:sponsors")
+    with SessionLocal() as db:
+        return _dump(SponsorOut, _require(sponsors_service.unarchive_sponsor(db, sponsor_id),
                                           "sponsor not found"))
 
 
@@ -1571,7 +1660,7 @@ def update_sponsor_lead(lead_id: int, status: str | None = None, notes: str | No
 def list_people(type: str | None = None, committee: str | None = None,
                 search: str | None = None, limit: int = 50) -> list[dict]:
     """List people (exec, committee, contacts) — used to find assignee ids."""
-    require_scope("read")
+    require_scope("read:people")
     with SessionLocal() as db:
         return _dump_list(PersonOut, people_service.list_people(
             db, type=type, committee=committee, search=search, limit=limit))
@@ -1580,7 +1669,7 @@ def list_people(type: str | None = None, committee: str | None = None,
 @mcp.tool()
 def get_person(person_id: int) -> dict:
     """Get one person by id (committee member or external contact)."""
-    require_scope("read")
+    require_scope("read:people")
     with SessionLocal() as db:
         return _dump(PersonOut, _require(people_service.get_person(db, person_id), "person not found"))
 
@@ -1593,7 +1682,7 @@ def create_person(name: str, type: str | None = None, committee: str | None = No
     """Add a person (committee member or external contact). `bio` is a public
     one-liner; `notes` is internal-only. Set show_on_website=true to publish them
     on the website team grid (their headshot is uploaded in the dashboard)."""
-    require_scope("write")
+    require_scope("write:people")
     data = _coerce(PersonCreate, _data(name=name, type=type, committee=committee,
                                        role_title=role_title, email=email, status=status,
                                        notes=notes, bio=bio, show_on_website=show_on_website,
@@ -1611,7 +1700,7 @@ def update_person(person_id: int, name: str | None = None, type: str | None = No
     """Update a person (only the fields you pass change). Set show_on_website
     true/false to add/remove them from the public website team grid; `display_order`
     sorts that grid (lower first)."""
-    require_scope("write")
+    require_scope("write:people")
     data = _coerce(PersonUpdate, _data(name=name, type=type, committee=committee,
                                        role_title=role_title, email=email, status=status,
                                        notes=notes, bio=bio, show_on_website=show_on_website,
@@ -1625,9 +1714,19 @@ def update_person(person_id: int, name: str | None = None, type: str | None = No
 def archive_person(person_id: int) -> dict:
     """Soft-delete (archive) a person. They're removed from the dashboard and the
     public team grid but never hard-deleted. Confirm with the human first."""
-    require_scope("write")
+    require_scope("write:people")
     with SessionLocal() as db:
         return _dump(PersonOut, _require(people_service.archive_person(db, person_id),
+                                         "person not found"))
+
+
+@mcp.tool()
+def unarchive_person(person_id: int) -> dict:
+    """Restore a previously archived person (sets archived=false). They reappear in
+    the dashboard and, if otherwise eligible, the public team grid."""
+    require_scope("write:people")
+    with SessionLocal() as db:
+        return _dump(PersonOut, _require(people_service.unarchive_person(db, person_id),
                                          "person not found"))
 
 

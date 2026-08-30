@@ -138,3 +138,17 @@ def archive_scan_target(
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "scan target not found")
     return ScanTargetOut.model_validate(target)
+
+
+@router.post("/{target_id:int}/unarchive", response_model=ScanTargetOut)
+def unarchive_scan_target(
+    target_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    key: APIKey = Depends(require_api_key("write")),
+) -> ScanTargetOut:
+    limiter.check_request(db, key_id=key.id, ip=client_ip(request))
+    target = service.unarchive_scan_target(db, target_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "scan target not found")
+    return ScanTargetOut.model_validate(target)

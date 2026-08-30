@@ -149,3 +149,13 @@ def archive_document(db: Session, document_id: int) -> Document | None:
     db.commit()
     db.refresh(doc)
     return doc
+
+
+def unarchive_document(db: Session, document_id: int) -> Document | None:
+    doc = db.get(Document, document_id)
+    if doc is None:
+        return None
+    doc.archived = False
+    db.commit()
+    db.refresh(doc)
+    return doc

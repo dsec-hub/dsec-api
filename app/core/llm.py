@@ -84,3 +84,16 @@ def classify(system_prompt: str, user_content: str, model: str | None = None) ->
 def generate(system_prompt: str, user_content: str, model: str | None = None) -> LLMResult:
     """Drafting / generation. Returns an `LLMResult` with the produced text."""
     return _chat(system_prompt, user_content, max_tokens=4096)
+
+
+def decide(system_prompt: str, user_content: str, model: str | None = None) -> LLMResult:
+    """Structured-decision call. `text` is the model's raw JSON object string.
+
+    Deliberately small (max_tokens=512): a decision is a compact JSON action, not
+    prose. The system prompt is responsible for demanding JSON-only output; the
+    caller parses `text` defensively (the model may wrap it in code fences). Kept
+    as its own name — distinct from classify/generate — so callers and tests can
+    patch the decision stage in isolation, and so a later swap to Anthropic
+    tool-use changes only this function.
+    """
+    return _chat(system_prompt, user_content, max_tokens=512)

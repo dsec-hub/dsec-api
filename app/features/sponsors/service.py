@@ -59,3 +59,13 @@ def archive_sponsor(db: Session, sponsor_id: int) -> Sponsor | None:
     db.commit()
     db.refresh(sponsor)
     return sponsor
+
+
+def unarchive_sponsor(db: Session, sponsor_id: int) -> Sponsor | None:
+    sponsor = db.get(Sponsor, sponsor_id)
+    if sponsor is None:
+        return None
+    sponsor.archived = False
+    db.commit()
+    db.refresh(sponsor)
+    return sponsor

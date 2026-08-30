@@ -79,3 +79,13 @@ def archive_person(db: Session, person_id: int) -> Person | None:
     db.commit()
     db.refresh(person)
     return person
+
+
+def unarchive_person(db: Session, person_id: int) -> Person | None:
+    person = db.get(Person, person_id)
+    if person is None:
+        return None
+    person.archived = False
+    db.commit()
+    db.refresh(person)
+    return person

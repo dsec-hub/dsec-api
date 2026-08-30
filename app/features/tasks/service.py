@@ -86,6 +86,16 @@ def archive_board(db: Session, board_id: int) -> TaskBoard | None:
     return board
 
 
+def unarchive_board(db: Session, board_id: int) -> TaskBoard | None:
+    board = db.get(TaskBoard, board_id)
+    if board is None:
+        return None
+    board.archived = False
+    db.commit()
+    db.refresh(board)
+    return board
+
+
 # -----------------------------------------------------------------------------
 # Tasks (cards)
 # -----------------------------------------------------------------------------
@@ -191,6 +201,16 @@ def archive_task(db: Session, task_id: int) -> Task | None:
     if task is None:
         return None
     task.archived = True
+    db.commit()
+    db.refresh(task)
+    return _attach_owners(db, task)
+
+
+def unarchive_task(db: Session, task_id: int) -> Task | None:
+    task = db.get(Task, task_id)
+    if task is None:
+        return None
+    task.archived = False
     db.commit()
     db.refresh(task)
     return _attach_owners(db, task)
