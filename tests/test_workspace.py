@@ -54,6 +54,64 @@ def test_projects_crud_and_scope(client, rw_key, ro_key):
 
 
 # --------------------------------------------------------------------------- #
+# SHOW-5: the project publish gate (public ⇒ approved) + review stamping
+# --------------------------------------------------------------------------- #
+
+def test_publish_gate_auto_approves_and_does_not_restamp(client, rw_key, db):
+    """Publishing through the API IS the human approval: the transition to public
+    stamps review_state='approved' + reviewed_at. An ordinary content edit of an
+    already-public project must NOT re-stamp them (regression: the gate once
+    re-approved on every edit)."""
+    r = client.post("/projects", json={"name": "Duck Radar", "is_public": True},
+                    headers=_h(rw_key))
+    assert r.status_code == 201
+    pid = r.json()["id"]
+    db.expire_all()
+    proj = db.get(models.Project, pid)
+    assert proj.is_public is True
+    assert proj.review_state == "approved"
+    assert proj.reviewed_at is not None
+    stamped = proj.reviewed_at
+
+    # content-only PATCH → review fields untouched
+    assert client.patch(f"/projects/{pid}", json={"status": "Completed"},
+                        headers=_h(rw_key)).status_code == 200
+    db.expire_all()
+    proj = db.get(models.Project, pid)
+    assert proj.review_state == "approved"
+    assert proj.reviewed_at == stamped
+
+    # a draft (is_public omitted) stays draft, unreviewed
+    dpid = client.post("/projects", json={"name": "Secret Duck"},
+                       headers=_h(rw_key)).json()["id"]
+    db.expire_all()
+    draft = db.get(models.Project, dpid)
+    assert draft.is_public is False
+    assert draft.review_state == "draft"
+    assert draft.reviewed_at is None
+
+    # draft → public via PATCH approves on the transition
+    assert client.patch(f"/projects/{dpid}", json={"is_public": True},
+                        headers=_h(rw_key)).status_code == 200
+    db.expire_all()
+    published = db.get(models.Project, dpid)
+    assert published.is_public is True
+    assert published.review_state == "approved"
+    assert published.reviewed_at is not None
+
+
+def test_public_project_requires_approved_check(db):
+    """The DB CHECK forbids a public project that is not approved — the guarantee
+    that holds no matter which service writes the row."""
+    import sqlalchemy
+
+    db.add(models.Project(name="Bad", slug="bad-pub", is_public=True, review_state="draft"))
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+# --------------------------------------------------------------------------- #
 # NEW-APIROUTERS-07: project URL + slug validation before the public showcase
 # --------------------------------------------------------------------------- #
 

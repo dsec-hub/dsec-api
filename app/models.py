@@ -17,6 +17,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -584,6 +585,36 @@ class Project(Base):
     related_event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), index=True, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # --- SHOW-5: submission + moderation workflow ---------------------------------
+    # A project may only be public once it is 'approved' (enforced by the CHECK in
+    # __table_args__). Scoring, if any, is advisory only — a human sets review_state.
+    #
+    # How the row was created: 'committee' (added directly in the hub) or 'portal'
+    # (a member submission via dsec-app). Every pre-existing row is committee-made.
+    source: Mapped[str] = mapped_column(
+        String(32), default="committee", server_default=text("'committee'"), nullable=False
+    )
+    # draft / pending / approved / rejected. Indexed for the moderation queue.
+    review_state: Mapped[str] = mapped_column(
+        String(16), default="draft", server_default=text("'draft'"), index=True, nullable=False
+    )
+    # Soft link to the submitting member's account (dsec-app). Deliberately NOT a FK:
+    # accounts live in a table this service does not own, and a deleted account must
+    # neither cascade-delete nor orphan-block the submission record.
+    submitted_by_account_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_by_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # review_note may be surfaced to the submitter; internal_note never leaves the hub.
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    internal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Who approved/rejected and when. reviewed_by is a human-readable email SNAPSHOT
+    # (email is mutable and reusable, so it is not a durable key); reviewed_by_account_id
+    # is the stable soft id for durable attribution. Neither is a FK — same reasoning as
+    # submitted_by_account_id above.
+    reviewed_by: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    reviewed_by_account_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
@@ -592,6 +623,16 @@ class Project(Base):
     )
     archived: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), index=True
+    )
+
+    # The gate the whole workflow rests on: nothing reaches the public site unless a
+    # human has approved it. dsec-hub's publish action must set review_state='approved'
+    # in the SAME write that sets is_public=true, or this CHECK rejects the update.
+    __table_args__ = (
+        CheckConstraint(
+            "is_public = false OR review_state = 'approved'",
+            name="ck_project_public_requires_approved",
+        ),
     )
 
 

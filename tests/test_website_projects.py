@@ -14,8 +14,8 @@ from app import models
 def test_public_projects_excludes_slugless(client, db):
     # A NULL slug is only reachable via a direct DB write (e.g. dsec-hub inserting
     # a project named purely in non-Latin script), so seed the rows directly.
-    db.add(models.Project(name="No Slug", slug=None, is_public=True))
-    db.add(models.Project(name="Has Slug", slug="has-slug", is_public=True))
+    db.add(models.Project(name="No Slug", slug=None, is_public=True, review_state="approved"))
+    db.add(models.Project(name="Has Slug", slug="has-slug", is_public=True, review_state="approved"))
     db.commit()
 
     feed = client.get("/website/projects").json()
@@ -29,7 +29,7 @@ def test_public_projects_excludes_slugless(client, db):
 def test_public_projects_slugless_is_not_fetchable_by_detail(client, db):
     # Belt-and-braces: even the slugless row's name-derived path 404s, proving the
     # feed filter is the only thing standing between it and a dead card.
-    db.add(models.Project(name="No Slug", slug=None, is_public=True))
+    db.add(models.Project(name="No Slug", slug=None, is_public=True, review_state="approved"))
     db.commit()
 
     assert client.get("/website/projects").json() == []
