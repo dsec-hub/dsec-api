@@ -346,7 +346,14 @@ CATALOG: tuple[Tool, ...] = (
 
     # ---- Media & attachments ---------------------------------------------- #
     Tool("list_media", "read", "Media & attachments",
-         "List images attached to an entity (read-only; uploads happen in the dashboard)."),
+         "List images attached to an entity (public URLs + alt text)."),
+    Tool("upload_media", "write", "Media & attachments",
+         "Upload an image (base64 bytes or a direct URL) to an entity; runs the "
+         "dashboard compression pipeline (WebP + JPEG/PNG under a byte budget)."),
+    Tool("update_media", "write", "Media & attachments",
+         "Edit an uploaded image's metadata: alt text, role, or sort order."),
+    Tool("delete_media", "write", "Media & attachments",
+         "Permanently delete an uploaded image (hard delete). Confirm first."),
     Tool("list_attachments", "read", "Media & attachments",
          "List files (PDFs, images) attached to an entity (read-only)."),
 )

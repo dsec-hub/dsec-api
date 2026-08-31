@@ -268,3 +268,106 @@ def test_extract_key_header_wins_over_query_param():
 def test_extract_key_none_when_absent():
     assert mcpauth._extract_key({}, b"") is None
     assert mcpauth._extract_key({}, b"key=") is None
+
+
+# --------------------------------------------------------------------------- #
+# media upload (the MCP upload_media tool + compression pipeline)
+# --------------------------------------------------------------------------- #
+
+def _tiny_png_b64(size=(1200, 800), color=(30, 144, 255)) -> str:
+    import base64
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+@pytest.fixture
+def _stub_storage(monkeypatch):
+    """Capture uploads instead of hitting R2/Supabase; return a public-ish URL."""
+    saved: dict[str, bytes] = {}
+
+    def fake_upload(path, data, content_type):
+        saved[path] = data
+        return f"https://media.test/{path}"
+
+    monkeypatch.setattr(mcpserver.media_storage, "upload_object", fake_upload)
+    return saved
+
+
+def test_upload_media_runs_pipeline_and_stores(db, _stub_storage):
+    with as_key(["read", "write"]):
+        ev = mcpserver.create_event(name="Gallery Night")
+        asset = mcpserver.upload_media(
+            entity_type="event", entity_id=ev["id"], role="poster",
+            image_base64=_tiny_png_b64(), alt_text="cover", sort_order=0,
+        )
+        listed = mcpserver.list_media(entity_type="event", entity_id=ev["id"])
+    assert asset["entity_type"] == "event" and asset["role"] == "poster"
+    assert asset["alt_text"] == "cover" and asset["sort_order"] == 0
+    assert asset["webp_url"].endswith(".webp")
+    assert asset["png_url"].endswith(".jpg")  # opaque photo → JPEG download
+    assert (asset["width"], asset["height"]) == (1200, 800)
+    # Two objects stored (display WebP + download), both under budget.
+    assert len(_stub_storage) == 2
+    assert [m["id"] for m in listed] == [asset["id"]]
+
+
+def test_upload_media_data_url_prefix_tolerated(db, _stub_storage):
+    with as_key(["read", "write"]):
+        ev = mcpserver.create_event(name="Data URL")
+        asset = mcpserver.upload_media(
+            entity_type="event", entity_id=ev["id"], role="image",
+            image_base64="data:image/png;base64," + _tiny_png_b64((300, 300)),
+        )
+    assert asset["width"] == 300
+
+
+def test_upload_media_requires_exactly_one_source(db):
+    with as_key(["read", "write"]):
+        with pytest.raises(ValueError):
+            mcpserver.upload_media(entity_type="event", entity_id=1, role="image")
+        with pytest.raises(ValueError):
+            mcpserver.upload_media(entity_type="event", entity_id=1, role="image",
+                                   image_base64="x", source_url="https://x/y.png")
+
+
+def test_upload_media_ssrf_guard_blocks_internal_url(db):
+    with as_key(["read", "write"]):
+        for bad in ("http://127.0.0.1/p.png", "http://169.254.169.254/latest",
+                    "http://localhost/p.png"):
+            with pytest.raises(ValueError):
+                mcpserver.upload_media(entity_type="event", entity_id=1, role="image",
+                                       source_url=bad)
+
+
+def test_upload_media_rejects_bad_role(db, _stub_storage):
+    with as_key(["read", "write"]):
+        ev = mcpserver.create_event(name="Bad Role")
+        with pytest.raises(ValueError):
+            mcpserver.upload_media(entity_type="event", entity_id=ev["id"],
+                                   role="not_a_role", image_base64=_tiny_png_b64())
+
+
+def test_read_scope_cannot_upload_media(db):
+    with as_key(["read"]):
+        with pytest.raises(mcpauth.MCPScopeError):
+            mcpserver.upload_media(entity_type="event", entity_id=1, role="image",
+                                   image_base64=_tiny_png_b64())
+
+
+def test_update_and_delete_media_round_trip(db, _stub_storage, monkeypatch):
+    monkeypatch.setattr(mcpserver.media_storage, "delete_objects", lambda paths: None)
+    with as_key(["read", "write"]):
+        ev = mcpserver.create_event(name="Edit Me")
+        asset = mcpserver.upload_media(entity_type="event", entity_id=ev["id"],
+                                       role="image", image_base64=_tiny_png_b64((400, 400)))
+        edited = mcpserver.update_media(asset["id"], alt_text="new", role="banner",
+                                        sort_order=3)
+        assert edited["alt_text"] == "new" and edited["role"] == "banner"
+        assert edited["sort_order"] == 3
+        assert mcpserver.delete_media(asset["id"]) == {"deleted": True, "media_id": asset["id"]}
+        assert mcpserver.list_media(entity_type="event", entity_id=ev["id"]) == []
