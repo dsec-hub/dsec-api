@@ -12,7 +12,12 @@ runs fine on serverless.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import ipaddress
+import socket
 from typing import Literal
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
@@ -44,6 +49,8 @@ from app.features.events.schemas import (
 from app.features.finance import service as finance_service
 from app.features.finance.schemas import EventBudgetOut, ReportOut, TransactionOut
 from app.features.media import service as media_service
+from app.features.media import storage as media_storage
+from app.features.media.schemas import ROLES as MEDIA_ROLES
 from app.features.media.schemas import MediaOut
 from app.features.meetings import service as meetings_service
 from app.features.meetings.notes import generate_meeting_notes as _gen_notes
@@ -110,8 +117,10 @@ finances, events (incl. speakers, sponsor & partner line-ups), community
 projects, task boards, meetings, documents, sponsors (pipeline, packages, leads,
 contacts) and partner orgs. Call `whoami` first to see what your API key is
 allowed to do. Reads need the 'read' scope; creating/updating needs 'write'; AI
-meeting-notes needs 'trigger'. Image/file uploads happen in the dashboard, not
-here — the media/attachment tools are read-only listings. Dates are ISO
+meeting-notes needs 'trigger'. Images can be uploaded with `upload_media` (pass
+raw bytes as base64, or a direct image URL) — it runs the same compression
+pipeline as the dashboard (EXIF-orient, downscale, WebP + JPEG/PNG under a byte
+budget). File (PDF) attachments are still dashboard-only. Dates are ISO
 YYYY-MM-DD; events and projects are drafts until you set is_public=true."""
 
 def _transport_security() -> TransportSecuritySettings:
@@ -1735,19 +1744,167 @@ def unarchive_person(person_id: int) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# media + attachments (read-only — uploads happen in the dashboard)
+# media (images) — list, upload, edit metadata, delete
 # --------------------------------------------------------------------------- #
+
+# Longest side we resize a base64/URL source down to before it even leaves this
+# process. The pipeline downscales to MEDIA_MAX_DIMENSION anyway, so shrinking
+# first only trims the payload — it never changes the stored result.
+_UPLOAD_FETCH_TIMEOUT = 20.0
+
+
+def _decode_base64_image(b64: str) -> bytes:
+    """Raw bytes from a base64 string, tolerating a ``data:`` URL prefix."""
+    s = b64.strip()
+    if s.startswith("data:") and "," in s:
+        s = s.split(",", 1)[1]
+    try:
+        return base64.b64decode(s, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"image_base64 is not valid base64: {exc}") from exc
+
+
+def _fetch_image_url(url: str) -> tuple[bytes, str | None]:
+    """Download an image by URL with an SSRF guard.
+
+    Only http(s) is allowed, the host must not resolve to a private / loopback /
+    link-local / reserved address, and redirects are NOT followed (a redirect
+    could otherwise bounce the request to an internal target after the guard has
+    passed). Returns (bytes, filename-from-path).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("source_url must be an http(s) URL")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("source_url has no host")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        raise ValueError(f"cannot resolve source_url host: {exc}") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ValueError("source_url resolves to a disallowed (internal) address")
+
+    import httpx
+
+    try:
+        with httpx.Client(timeout=_UPLOAD_FETCH_TIMEOUT, follow_redirects=False) as client:
+            resp = client.get(url)
+            if resp.is_redirect:
+                raise ValueError(
+                    "source_url returned a redirect; pass the final direct image URL"
+                )
+            resp.raise_for_status()
+            data = resp.content
+    except httpx.HTTPError as exc:
+        raise ValueError(f"failed to fetch source_url: {exc}") from exc
+    name = parsed.path.rsplit("/", 1)[-1] or None
+    return data, name
+
 
 @mcp.tool()
 def list_media(entity_type: str, entity_id: int) -> list[dict]:
     """List the images attached to an entity (their public URLs + alt text).
-    entity_type is event | project | sponsor | speaker | person | partner. Uploads
-    are done in the dashboard (they need the cropped binary); this is read-only."""
+    entity_type is event | project | sponsor | speaker | person | partner |
+    portal_account | document. Upload new images with `upload_media`."""
     require_scope("read")
     with SessionLocal() as db:
         return _dump_list(MediaOut, media_service.list_media(
             db, entity_type=entity_type, entity_id=entity_id))
 
+
+@mcp.tool()
+def upload_media(entity_type: str, entity_id: int, role: str,
+                 image_base64: str | None = None, source_url: str | None = None,
+                 filename: str | None = None, alt_text: str | None = None,
+                 sort_order: int | None = None) -> dict:
+    """Upload an image to an entity and return the stored asset (public URLs).
+
+    Provide the image EITHER as `image_base64` (raw file bytes, base64-encoded — a
+    ``data:`` URL prefix is tolerated) OR as `source_url` (a direct http(s) image
+    URL the server downloads; redirects are not followed, so pass the final URL).
+    Give exactly one.
+
+    The bytes run the same pipeline as the dashboard: EXIF auto-orient, downscale
+    to the 2000px cap, then a display **WebP** (~100 KB budget) plus a download
+    copy — **JPEG** for photos, **PNG** for a transparent `logo` — each squeezed
+    under its byte budget. Nothing needs to be pre-cropped or pre-compressed.
+
+    `entity_type` is event | project | sponsor | speaker | person | partner |
+    portal_account | document. `role` is image | poster | banner | logo | photo
+    (a `poster`/`banner` is the event's cover; `logo` keeps transparency for
+    sponsor/partner marks; `photo` is a speaker/person headshot). `sort_order`
+    orders the gallery (lower first; the cover is usually sort_order 0).
+    Max source size is 15 MB."""
+    require_scope("write")
+    if (image_base64 is None) == (source_url is None):
+        raise ValueError("provide exactly one of image_base64 or source_url")
+
+    if image_base64 is not None:
+        data = _decode_base64_image(image_base64)
+    else:
+        data, url_name = _fetch_image_url(source_url)  # type: ignore[arg-type]
+        filename = filename or url_name
+
+    if not data:
+        raise ValueError("empty image")
+    if len(data) > settings.MEDIA_MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"image is {len(data)} bytes, over the "
+            f"{settings.MEDIA_MAX_UPLOAD_BYTES}-byte limit"
+        )
+
+    with SessionLocal() as db:
+        try:
+            asset = media_service.create_media(
+                db, entity_type=entity_type, entity_id=entity_id, role=role,
+                file_bytes=data, filename=filename, alt_text=alt_text,
+            )
+            if sort_order is not None:
+                asset = media_service.update_media(
+                    db, asset.id, {"sort_order": sort_order}
+                ) or asset
+        except media_storage.StorageError as exc:
+            # Storage not configured / backend rejected the upload.
+            raise ValueError(f"image storage failed: {exc}") from exc
+        return _dump(MediaOut, asset)
+
+
+@mcp.tool()
+def update_media(media_id: int, alt_text: str | None = None, role: str | None = None,
+                 sort_order: int | None = None) -> dict:
+    """Edit an uploaded image's metadata (no new file): its `alt_text`, `role`
+    (image|poster|banner|logo|photo), or `sort_order` (gallery position; lower
+    shows first). Only the fields you pass change. Pass alt_text="" to clear it."""
+    require_scope("write")
+    if role is not None and role not in MEDIA_ROLES:
+        raise ValueError(f"role must be one of {sorted(MEDIA_ROLES)}")
+    data = _data(alt_text=alt_text, role=role, sort_order=sort_order)
+    if not data:
+        raise ValueError("nothing to update")
+    with SessionLocal() as db:
+        return _dump(MediaOut, _require(media_service.update_media(db, media_id, data),
+                                        "media not found"))
+
+
+@mcp.tool()
+def delete_media(media_id: int) -> dict:
+    """Permanently delete an uploaded image — removes the stored WebP + download
+    objects and the record. This is a hard delete (no undo); confirm with the
+    human first."""
+    require_scope("write")
+    with SessionLocal() as db:
+        if not media_service.delete_media(db, media_id):
+            raise ValueError("media not found")
+        return {"deleted": True, "media_id": media_id}
+
+
+# --------------------------------------------------------------------------- #
+# attachments (files/PDFs — read-only; uploads happen in the dashboard)
+# --------------------------------------------------------------------------- #
 
 @mcp.tool()
 def list_attachments(entity_type: str, entity_id: int) -> list[dict]:
